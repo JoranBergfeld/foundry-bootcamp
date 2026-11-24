@@ -6,5 +6,8 @@
   "preferredLocation": "swedencentral, eastus2",
   "estimatedDailyCostsUsd": 0.0,
   "estimatedSharedDeploymentDailyCostsUsd": 0.0,
+  "contentPreparation": {
+    "studentZipExclusions": ["docs", "AGENTS.md", "GLOSSARY.md"]
+  },
   "Quality": "Testing"
 }
