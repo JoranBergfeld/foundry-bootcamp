@@ -19,11 +19,11 @@ The unit imported into the MicroHack platform, containing participant and coach 
 _Avoid_: Lab (when referring to the platform import unit)
 
 **Participant environment**:
-The environment allocated to one participant for the bootcamp day and retained across all six labs, without requiring six different sets of credentials.
+The MicroHack-managed environment allocated to one participant for the bootcamp day and retained across all six labs, without requiring six different sets of credentials.
 _Avoid_: Lab environment (when implying a separate allocation per lab)
 
 **Shared provisioning**:
-The common setup of participant environments used by all six labs, rather than separate provisioning for each lab.
+The common setup of bootcamp resources within participant environments, used by all six labs rather than separate provisioning for each lab.
 
 **Shared baseline dataset**:
 The common dataset made available across all six labs, without requiring any lab to be completed first.
