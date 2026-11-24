@@ -8,8 +8,12 @@ Six one-hour sessions about building, evaluating, deploying, integrating, and go
 The subject participants build, evaluate, deploy, integrate, and govern during the bootcamp.
 
 **Lab**:
-The hands-on learning unit for one bootcamp session, with its own executable code and participant documentation.
+The 40-45-minute follow-along learning unit within one bootcamp session, with participant documentation and any supporting executable code. Its documentation supports following the material without the presenter.
 _Avoid_: MicroHack (when referring to an individual bootcamp lab)
+
+**Content pack**:
+The unit imported into the MicroHack platform, containing participant and coach material. The bootcamp's content pack contains all six labs.
+_Avoid_: Lab (when referring to the platform import unit)
 
 **Participant environment**:
 The environment allocated to one participant for the bootcamp day and retained across all six labs, without requiring six different sets of credentials.
