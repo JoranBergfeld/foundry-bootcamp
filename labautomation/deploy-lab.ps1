@@ -96,14 +96,14 @@ if ($env:BOOTCAMP_ORGANIZER_INITIAL_PROVISIONING -ceq 'true' -and $resources.Cou
             throw "Empty initial scope cleanup was incomplete: $($teardown.Errors -join '; '); residuals: $($teardown.SoftDeletedResidual -join ', ')."
         }
     }
-    $result = Invoke-MhhDeploymentWithRegionFallback `
+    $coreDeployment = Invoke-MhhDeploymentWithRegionFallback `
         -PreferredLocations $regions `
         -ResourceGroupName $ResourceGroupName `
         -RgOwnerEntraObjectIds $AllowedEntraUserIds `
         -TemplateFile $template `
         -TemplateParameterObject $parameters `
         -DeploymentNamePrefix 'bootcamp-core'
-    if (-not $result.Success) {
+    if (-not $coreDeployment.Success) {
         throw 'Foundry core deployment did not succeed.'
     }
 } else {
@@ -141,7 +141,7 @@ if ($env:BOOTCAMP_ORGANIZER_INITIAL_PROVISIONING -ceq 'true' -and $resources.Cou
     foreach ($key in $deployment.Outputs.Keys) {
         $outputs[$key] = $deployment.Outputs[$key].Value
     }
-    $result = @{ LocationUsed = $group.Location; Outputs = $outputs }
+    $coreDeployment = @{ LocationUsed = $group.Location; Outputs = $outputs }
 }
 
 $requiredOutputs = @(
@@ -149,35 +149,35 @@ $requiredOutputs = @(
     'SearchEndpoint', 'StorageAccountName', 'StorageBaselineContainerName'
 )
 foreach ($key in $requiredOutputs) {
-    if (-not $result.Outputs.ContainsKey($key) -or [string]::IsNullOrWhiteSpace($result.Outputs[$key])) {
+    if (-not $coreDeployment.Outputs.ContainsKey($key) -or [string]::IsNullOrWhiteSpace($coreDeployment.Outputs[$key])) {
         throw "Foundry core deployment is missing required output '$key'. No credentials were published."
     }
 }
-if ([string]::IsNullOrWhiteSpace($result.LocationUsed)) {
+if ([string]::IsNullOrWhiteSpace($coreDeployment.LocationUsed)) {
     throw 'Foundry core deployment is missing required output Region. No credentials were published.'
 }
 
 $baselineIndexName = & (Join-Path $PSScriptRoot 'provision-baseline.ps1') `
-    -StorageAccountName $result.Outputs.StorageAccountName `
-    -ContainerName $result.Outputs.StorageBaselineContainerName `
+    -StorageAccountName $coreDeployment.Outputs.StorageAccountName `
+    -ContainerName $coreDeployment.Outputs.StorageBaselineContainerName `
     -SubscriptionId $SubscriptionId `
     -ResourceGroupName $ResourceGroupName `
-    -SearchEndpoint $result.Outputs.SearchEndpoint
+    -SearchEndpoint $coreDeployment.Outputs.SearchEndpoint
 if ([string]::IsNullOrWhiteSpace($baselineIndexName)) {
     throw 'Baseline indexing did not return an index name. No credentials were published.'
 }
 
-$values = [ordered]@{
+$credentialValues = [ordered]@{
     ResourceGroupName = $ResourceGroupName
-    Region = $result.LocationUsed
-    FoundryProjectEndpoint = $result.Outputs.FoundryProjectEndpoint
-    ChatDeploymentName = $result.Outputs.ChatDeploymentName
-    EmbeddingDeploymentName = $result.Outputs.EmbeddingDeploymentName
-    SearchEndpoint = $result.Outputs.SearchEndpoint
-    StorageAccountName = $result.Outputs.StorageAccountName
-    StorageBaselineContainerName = $result.Outputs.StorageBaselineContainerName
+    Region = $coreDeployment.LocationUsed
+    FoundryProjectEndpoint = $coreDeployment.Outputs.FoundryProjectEndpoint
+    ChatDeploymentName = $coreDeployment.Outputs.ChatDeploymentName
+    EmbeddingDeploymentName = $coreDeployment.Outputs.EmbeddingDeploymentName
+    SearchEndpoint = $coreDeployment.Outputs.SearchEndpoint
+    StorageAccountName = $coreDeployment.Outputs.StorageAccountName
+    StorageBaselineContainerName = $coreDeployment.Outputs.StorageBaselineContainerName
     BaselineIndexName = $baselineIndexName
 }
-foreach ($name in $values.Keys) {
-    @{ HackboxCredential = @{ name = $name; value = $values[$name] } }
+foreach ($name in $credentialValues.Keys) {
+    @{ HackboxCredential = @{ name = $name; value = $credentialValues[$name] } }
 }
