@@ -22,7 +22,8 @@ and Application Insights tracing (#16), plus the pre-indexed baseline dataset
 - Register `Microsoft.CognitiveServices`, `Microsoft.Search`,
   `Microsoft.Storage`, `Microsoft.OperationalInsights` and `Microsoft.Insights`
   for each event subscription before fan-out. Check the AI Search Basic service
-  limit per subscription/region for N participants. Provide Az.Accounts, Az.Resources, an installed Bicep compiler and the
+  limit per subscription/region for N participants. Provide Az.Accounts, Az.Resources (including
+  `New-AzResourceGroup` and `New-AzRoleAssignment`), an installed Bicep compiler and the
   PowerShell 7.2 or later, and the current MicroHack helpers `Get-MhhStableHash`,
   `Invoke-MhhDeploymentWithRegionFallback`, and `Remove-MhhResourceGroup`.
   Pin/test the platform runner's helper version before the event; helpers are
@@ -167,13 +168,21 @@ live deployment.
 
 ## Initial provisioning versus retries
 
-**Default: non-destructive incremental deployment only.** An existing RG stays
-in its existing region even if the preferred list changes. A missing RG fails
-and requires organizer intervention. No default-path deletion or cross-region
-retry exists. Stable account, project, deployment and role assignment names,
-and incremental ARM mode, retain unrelated resources, agents, connections and
-participant work. Failed deployments propagate; there is no automatic reset.
-An existing populated scope uses this path even if organizer opt-in remains set.
+**Default: non-destructive incremental deployment only.** A standard first run
+(no organizer opt-in) creates a missing participant RG in the **first** supplied
+region only, ensures each supplied participant has unconditional RG Owner (as
+the MicroHack helper does, never removing grants), and deploys incrementally.
+This works in every deployment type, including `subscription` mode. There is no
+cross-region retry on this path: if the first region lacks quota or capacity,
+the run fails and the organizer adjusts the supplied regions.
+
+An existing RG stays in its existing region, which must be one of the supplied
+regions; otherwise the hook fails before deploying and does not move or delete
+the RG. No default-path deletion exists. Stable account, project, deployment
+and role assignment names, and incremental ARM mode, retain unrelated
+resources, agents, connections and participant work. Failed deployments
+propagate; there is no automatic reset. An existing populated scope uses this
+path even if organizer opt-in remains set.
 
 For organizer-run **initial provisioning only**, the organizer may set
 `BOOTCAMP_ORGANIZER_INITIAL_PROVISIONING=true` in the **provisioner job process
@@ -182,7 +191,7 @@ never expose it as a participant reset option. This is an operator intent gate,
 not an authorization boundary or an additional hook parameter. The platform's
 public contract does not document a UI for injecting process environment
 variables: organizers must arrange this on their runner. Without it, the hook
-remains safely incremental and offers no fallback.
+remains safely incremental and offers no cross-region fallback.
 
 The fallback helper is used only when this opt-in is present **and the target
 RG is absent or demonstrably disposable**. Resource-empty alone is insufficient:
@@ -215,8 +224,8 @@ being treated as an empty scope. Destructive recovery of such an environment
 is a separate organizer-controlled action, outside this hook.
 
 In `subscription` mode the hook derives `lab-<stable hash>` from the sorted
-participant IDs, as in the MicroHack template. In both RG modes it requires the
-platform's RG name. Changing participant allocation/IDs mid-event is not a
+participant IDs, as in the MicroHack template, and creates that RG on a
+standard first run. In both RG modes it requires the platform's RG name. Changing participant allocation/IDs mid-event is not a
 supported way to recover an environment.
 
 ## Participant values
@@ -253,7 +262,8 @@ az bicep lint --file labautomation\foundry-core.bicep
 Tests invoke the real hook, substituting only platform/Azure external commands,
 including a simulated Storage/Search data plane, and compile/inspect the ARM
 deployment artifact without deploying it. They
-exercise region input/order, organizer gating, in-place reruns, platform scope
+exercise region input/order, standard first-run RG creation, existing-RG region
+checks, organizer gating, in-place reruns, platform scope
 and identity inputs, pre-existing RG metadata/access preservation, success-only
 credential publication, the pinned source archive, safe dataset sharding,
 indexer/query readiness, and declared keyless resources/models.

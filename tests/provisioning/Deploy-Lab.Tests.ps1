@@ -10,6 +10,8 @@ BeforeAll {
     function Get-AzResourceLock { param($ResourceGroupName) }
     function Get-AzResourceGroupDeployment { param($ResourceGroupName) }
     function Get-AzRoleAssignment { param($Scope) }
+    function New-AzResourceGroup { param($Name, $Location) }
+    function New-AzRoleAssignment { param($ObjectId, $RoleDefinitionId, $Scope) }
     function New-AzResourceGroupDeployment {
         param($Name, $ResourceGroupName, $TemplateFile, $TemplateParameterObject, $Mode)
     }
@@ -107,6 +109,15 @@ Describe 'MicroHack Foundry provisioning hook' {
             }
         }
         Mock Get-MhhStableHash { 'a1b2c3d4e5f6a1b2c3d4e5f6' }
+        Mock New-AzResourceGroup {
+            @{
+                ResourceGroupName = $Name
+                ResourceId = "/subscriptions/00000000-0000-0000-0000-000000000001/resourceGroups/$Name"
+                Location = $Location
+                ProvisioningState = 'Succeeded'
+            }
+        }
+        Mock New-AzRoleAssignment {}
         Mock Remove-MhhResourceGroup {
             @{ ManifestCaptured = $true; Errors = @(); SoftDeletedResidual = @() }
         }
@@ -186,14 +197,29 @@ Describe 'MicroHack Foundry provisioning hook' {
             Should -Be 'region-first'
     }
 
-    It 'pins even an empty participant retry to the existing region without organizer opt-in' {
+    It 'keeps an existing RG in its own region when that region is a supplied preference' {
         $env:BOOTCAMP_ORGANIZER_INITIAL_PROVISIONING = $null
-        $script:Inputs.PreferredLocation = @('region-second')
+        $script:Inputs.PreferredLocation = @('region-second', 'region-first')
         & $script:Hook @script:Inputs | Out-Null
         Should -Invoke Invoke-MhhDeploymentWithRegionFallback -Times 0
+        Should -Invoke Remove-MhhResourceGroup -Times 0
+        Should -Invoke New-AzResourceGroup -Times 0
         Should -Invoke New-AzResourceGroupDeployment -Times 1 -ParameterFilter {
             $TemplateParameterObject.location -eq 'region-first' -and $Mode -eq 'Incremental'
         }
+    }
+
+    It 'fails clearly when an existing RG is outside the supplied regions' {
+        $env:BOOTCAMP_ORGANIZER_INITIAL_PROVISIONING = $null
+        $script:Inputs.PreferredLocation = @('region-second')
+        Mock Get-AzResource { @{ ResourceType = 'Microsoft.Search/searchServices' } }
+        $published = [System.Collections.Generic.List[object]]::new()
+        { & $script:Hook @script:Inputs | ForEach-Object { $published.Add($_) } } |
+            Should -Throw "*'region-first'*not among the supplied regions*region-second*"
+        $published.Count | Should -Be 0
+        Should -Invoke New-AzResourceGroupDeployment -Times 0
+        Should -Invoke Invoke-MhhDeploymentWithRegionFallback -Times 0
+        Should -Invoke Remove-MhhResourceGroup -Times 0
     }
 
     It 'starts an empty organizer scope at the first preference instead of letting helper reuse reorder it' {
@@ -237,12 +263,41 @@ Describe 'MicroHack Foundry provisioning hook' {
         Should -Invoke Remove-MhhResourceGroup -Times 0
     }
 
-    It 'does not recreate a missing participant RG on retry' {
-        Mock Get-AzResourceGroup { @() }
+    It 'provisions a standard first run in the first supplied region without opt-in, fallback or deletion: <DeploymentMode>' -ForEach @(
+        @{ DeploymentMode = 'subscription'; Group = 'lab-a1b2c3d4e5f6a1b2c3d4e5f6' }
+        @{ DeploymentMode = 'resourcegroup'; Group = 'participant' }
+    ) {
         $env:BOOTCAMP_ORGANIZER_INITIAL_PROVISIONING = $null
-        { & $script:Hook @script:Inputs } | Should -Throw '*organizer must perform initial provisioning*'
+        Mock Get-AzResourceGroup { @() }
+        Mock Get-AzRoleAssignment { @() }
+        $script:Inputs.DeploymentType = $DeploymentMode
+        if ($DeploymentMode -eq 'subscription') { $script:Inputs.ResourceGroupName = '' }
+        $credentials = @(& $script:Hook @script:Inputs)
+        Should -Invoke New-AzResourceGroup -Times 1 -Exactly -ParameterFilter {
+            $Name -eq $Group -and $Location -eq 'region-first'
+        }
+        Should -Invoke New-AzRoleAssignment -Times 1 -Exactly -ParameterFilter {
+            $ObjectId -eq '00000000-0000-0000-0000-000000000002' -and
+            $RoleDefinitionId -eq '8e3af657-a8ff-443c-a75c-2fe8c4bcb635' -and
+            $Scope -eq "/subscriptions/00000000-0000-0000-0000-000000000001/resourceGroups/$Group"
+        }
+        Should -Invoke New-AzResourceGroupDeployment -Times 1 -Exactly -ParameterFilter {
+            $ResourceGroupName -eq $Group -and $Mode -eq 'Incremental' -and
+            $TemplateParameterObject.location -eq 'region-first'
+        }
         Should -Invoke Invoke-MhhDeploymentWithRegionFallback -Times 0
-        Should -Invoke New-AzResourceGroupDeployment -Times 0
+        Should -Invoke Remove-MhhResourceGroup -Times 0
+        ($credentials | Where-Object { $_.HackboxCredential.name -eq 'Region' }).HackboxCredential.value |
+            Should -Be 'region-first'
+        ($credentials | Where-Object { $_.HackboxCredential.name -eq 'ResourceGroupName' }).HackboxCredential.value |
+            Should -Be $Group
+    }
+
+    It 'does not duplicate an existing participant RG Owner grant on a standard run' {
+        $env:BOOTCAMP_ORGANIZER_INITIAL_PROVISIONING = $null
+        & $script:Hook @script:Inputs | Out-Null
+        Should -Invoke New-AzRoleAssignment -Times 0
+        Should -Invoke New-AzResourceGroup -Times 0
     }
 
     It 'accepts comma-separated platform preferences without adding a fallback region' {

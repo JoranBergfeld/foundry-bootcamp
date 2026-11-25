@@ -107,8 +107,25 @@ if ($env:BOOTCAMP_ORGANIZER_INITIAL_PROVISIONING -ceq 'true' -and $resources.Cou
         throw 'Foundry core deployment did not succeed.'
     }
 } else {
-    if (-not $group) {
-        throw 'Participant resource group is missing. An organizer must perform initial provisioning.'
+    if ($group) {
+        if ($group.Location -notin $regions) {
+            throw "Participant resource group '$ResourceGroupName' is in '$($group.Location)', which is not among the supplied regions ($($regions -join ', ')). It was not moved or deleted; supply its region or have an organizer resolve the allocation."
+        }
+    } else {
+        # Standard first run: create in the first platform preference only. No fallback or deletion.
+        $group = New-AzResourceGroup -Name $ResourceGroupName -Location $regions[0]
+    }
+    $ownerRoleId = '8e3af657-a8ff-443c-a75c-2fe8c4bcb635'
+    $groupScope = "/subscriptions/$SubscriptionId/resourceGroups/$ResourceGroupName"
+    $existingOwners = @(Get-AzRoleAssignment -Scope $groupScope | Where-Object {
+        $_.Scope -eq $groupScope -and ($_.RoleDefinitionId -split '/')[-1] -eq $ownerRoleId -and
+        [string]::IsNullOrWhiteSpace($_.Condition)
+    } | ForEach-Object { $_.ObjectId })
+    # Mirrors the MicroHack helper's participant RG Owner grant; existing grants are never removed.
+    foreach ($participantId in ($AllowedEntraUserIds | Select-Object -Unique)) {
+        if ($participantId -notin $existingOwners) {
+            $null = New-AzRoleAssignment -ObjectId $participantId -RoleDefinitionId $ownerRoleId -Scope $groupScope
+        }
     }
     $parameters.location = $group.Location
     $deployment = New-AzResourceGroupDeployment `
