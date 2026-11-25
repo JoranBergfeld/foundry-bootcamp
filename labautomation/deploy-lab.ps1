@@ -1,0 +1,100 @@
+param(
+    [Parameter(Mandatory = $true)]
+    [ValidateSet('subscription', 'resourcegroup', 'resourcegroup-with-subscriptionowner')]
+    [string]$DeploymentType,
+
+    [Parameter(Mandatory = $true)]
+    [string]$SubscriptionId,
+
+    [string]$ResourceGroupName = '',
+    [string[]]$PreferredLocation = @(),
+    [string[]]$AllowedEntraUserIds = @()
+)
+
+$ErrorActionPreference = 'Stop'
+Set-StrictMode -Version Latest
+
+$regions = @($PreferredLocation | ForEach-Object { $_ -split ',' } |
+    ForEach-Object { $_.Trim() } | Where-Object { $_ } | Select-Object -Unique)
+if ($regions.Count -eq 0) {
+    throw 'PreferredLocation must contain at least one platform-supplied region; no default region is defined.'
+}
+if ($AllowedEntraUserIds.Count -eq 0 -or @($AllowedEntraUserIds | Where-Object { [string]::IsNullOrWhiteSpace($_) }).Count -gt 0) {
+    throw 'AllowedEntraUserIds must contain the participant Entra object IDs.'
+}
+if ($DeploymentType -eq 'subscription') {
+    $stableHash = Get-MhhStableHash ($AllowedEntraUserIds | Sort-Object -Unique) -Length 24
+    $ResourceGroupName = "lab-$stableHash"
+} elseif ([string]::IsNullOrWhiteSpace($ResourceGroupName)) {
+    throw "ResourceGroupName must be provided for DeploymentType '$DeploymentType'."
+}
+
+$context = Get-AzContext
+if (-not $context -or $context.Subscription.Id -ne $SubscriptionId) {
+    throw 'The authenticated subscription must match SubscriptionId. MicroHack must supply the authenticated context.'
+}
+
+$group = Get-AzResourceGroup | Where-Object { $_.ResourceGroupName -eq $ResourceGroupName }
+$resources = @(if ($group) { Get-AzResource -ResourceGroupName $ResourceGroupName })
+$template = Join-Path $PSScriptRoot 'foundry-core.bicep'
+$parameters = @{ participantObjectIds = $AllowedEntraUserIds }
+
+# The MicroHack helper can delete the entire RG on recycle, including same-region retries.
+if ($env:BOOTCAMP_ORGANIZER_INITIAL_PROVISIONING -ceq 'true' -and $resources.Count -eq 0) {
+    # Its reuse phase otherwise tries an existing RG's region before the first preference.
+    if ($group -and $group.Location -ne $regions[0]) {
+        $teardown = Remove-MhhResourceGroup -ResourceGroupName $ResourceGroupName
+        if (-not $teardown.ManifestCaptured -or $teardown.Errors.Count -gt 0 -or $teardown.SoftDeletedResidual.Count -gt 0) {
+            throw "Empty initial scope cleanup was incomplete: $($teardown.Errors -join '; '); residuals: $($teardown.SoftDeletedResidual -join ', ')."
+        }
+    }
+    $result = Invoke-MhhDeploymentWithRegionFallback `
+        -PreferredLocations $regions `
+        -ResourceGroupName $ResourceGroupName `
+        -RgOwnerEntraObjectIds $AllowedEntraUserIds `
+        -TemplateFile $template `
+        -TemplateParameterObject $parameters `
+        -DeploymentNamePrefix 'bootcamp-core'
+    if (-not $result.Success) {
+        throw 'Foundry core deployment did not succeed.'
+    }
+} else {
+    if (-not $group) {
+        throw 'Participant resource group is missing. An organizer must perform initial provisioning.'
+    }
+    $parameters.location = $group.Location
+    $deployment = New-AzResourceGroupDeployment `
+        -Name 'bootcamp-core' `
+        -ResourceGroupName $ResourceGroupName `
+        -TemplateFile $template `
+        -TemplateParameterObject $parameters `
+        -Mode Incremental
+    if ($deployment.ProvisioningState -ne 'Succeeded') {
+        throw 'Foundry core deployment did not succeed.'
+    }
+    $outputs = @{}
+    foreach ($key in $deployment.Outputs.Keys) {
+        $outputs[$key] = $deployment.Outputs[$key].Value
+    }
+    $result = @{ LocationUsed = $group.Location; Outputs = $outputs }
+}
+
+foreach ($key in @('FoundryProjectEndpoint', 'ChatDeploymentName', 'EmbeddingDeploymentName')) {
+    if (-not $result.Outputs.ContainsKey($key) -or [string]::IsNullOrWhiteSpace($result.Outputs[$key])) {
+        throw "Foundry core deployment is missing required output '$key'. No credentials were published."
+    }
+}
+if ([string]::IsNullOrWhiteSpace($result.LocationUsed)) {
+    throw 'Foundry core deployment is missing required output Region. No credentials were published.'
+}
+
+$values = [ordered]@{
+    ResourceGroupName = $ResourceGroupName
+    Region = $result.LocationUsed
+    FoundryProjectEndpoint = $result.Outputs.FoundryProjectEndpoint
+    ChatDeploymentName = $result.Outputs.ChatDeploymentName
+    EmbeddingDeploymentName = $result.Outputs.EmbeddingDeploymentName
+}
+foreach ($name in $values.Keys) {
+    @{ HackboxCredential = @{ name = $name; value = $values[$name] } }
+}
