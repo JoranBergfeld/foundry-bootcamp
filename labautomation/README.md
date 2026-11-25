@@ -6,8 +6,8 @@ platform's five parameters: `DeploymentType`, `SubscriptionId`,
 `ResourceGroupName`, `PreferredLocation`, and `AllowedEntraUserIds`.
 There is no per-lab provisioning entry point or shared subscription-level
 Foundry account. Each participant environment also receives AI Search, Storage
-and Application Insights tracing (#16). Baseline dataset upload and indexing are
-deferred to ticket #17.
+and Application Insights tracing (#16), plus the pre-indexed baseline dataset
+(#17).
 
 ## Operator prerequisites
 
@@ -15,12 +15,15 @@ deferred to ticket #17.
   supply its helper cmdlets before invoking the hook. The provisioner needs the
   platform's subscription Owner permissions, including resource and role
   assignment creation. The hook verifies the context and never signs in or
-  switches subscriptions.
+  switches subscriptions. Its ARM access token must contain the authenticated
+  principal's Entra `oid` claim; the same principal must be able to obtain
+  tokens for Storage and Search. The template grants this principal the
+  resource-scoped data-plane roles required below.
 - Register `Microsoft.CognitiveServices`, `Microsoft.Search`,
   `Microsoft.Storage`, `Microsoft.OperationalInsights` and `Microsoft.Insights`
   for each event subscription before fan-out. Check the AI Search Basic service
   limit per subscription/region for N participants. Provide Az.Accounts, Az.Resources, an installed Bicep compiler and the
-  current MicroHack helpers `Get-MhhStableHash`,
+  PowerShell 7.2 or later, and the current MicroHack helpers `Get-MhhStableHash`,
   `Invoke-MhhDeploymentWithRegionFallback`, and `Remove-MhhResourceGroup`.
   Pin/test the platform runner's helper version before the event; helpers are
   platform-supplied, not downloaded by the hook.
@@ -43,6 +46,10 @@ deferred to ticket #17.
 - Do not run two provisioning jobs concurrently against the same participant
   scope. MicroHack owns allocation, control-plane access, environment lifetime
   and eventual teardown.
+- Budget for copying and indexing approximately 35 MB of source data per
+  participant, Search capacity, and RBAC propagation. Provisioning waits for a
+  completed indexer and a successful query rather than publishing a partially
+  prepared environment.
 
 ## Models and resources
 
@@ -85,7 +92,7 @@ No key, password, token or connection string is retrieved or published.
 |---|---|
 | AI Search | `srch-<uniqueString>`, Basic, 1 replica/partition, semantic ranker free tier, system-assigned identity, `disableLocalAuth` (Entra only) |
 | Storage | `st<uniqueString>`, StorageV2 Standard_LRS, shared key and public blob access disabled, OAuth default, TLS 1.2 |
-| Baseline container | `baseline` (private); #17 uploads the baseline dataset here |
+| Baseline container | `baseline` (private); contains the shared ticket dataset |
 | Log Analytics | `log-<uniqueString>`, PerGB2018, 30-day retention, local auth disabled |
 | Application Insights | `appi-<uniqueString>`, workspace-based, local auth disabled |
 | Project connections | `bootcamp-tracing` (AppInsights) and `bootcamp-search` (CognitiveSearch), both `ProjectManagedIdentity`, no stored credentials |
@@ -101,15 +108,57 @@ idempotent):
 | Foundry project MI | Search Service Contributor, Search Index Data Contributor | Search | `bootcamp-search` project-identity connection |
 | Foundry project MI | Monitoring Metrics Publisher | Application Insights | Keyless trace ingestion |
 | Search MI | Storage Blob Data Reader | Storage | Indexer reads `baseline` (#17) |
-| Search MI | Cognitive Services OpenAI User | Foundry account | Integrated vectorization with `bootcamp-embedding` (#17) |
+| Search MI | Cognitive Services OpenAI User | Foundry account | Available for keyless integrated vectorization in labs |
+| Provisioner | Storage Blob Data Contributor | Storage | Upload and verify the baseline |
+| Provisioner | Search Service Contributor, Search Index Data Reader | Search | Create the indexer and verify queries |
 
-**Reuse by #17:** upload to container `baseline` on `StorageAccountName` with
-the provisioner's Entra identity (grant it Storage Blob Data Contributor and
-Search roles as needed); create the blob data source with a
-`ResourceId=<storage resource ID>;` connection (no key), the indexer running as
-the Search system-assigned identity, and the embedding skill/vectorizer pointing
-at the Foundry account with no API key. Do not introduce keys or a user-assigned
-identity.
+If the provisioner is also a supplied participant, its participant roles
+already cover these operations and duplicate role assignments are avoided.
+All role assignments use stable resource/principal/role-derived names.
+
+## Shared baseline dataset
+
+The repository includes the unchanged version-1 ZIP of
+[Synthetic IT Support Tickets](https://www.kaggle.com/datasets/ahsanneural/synthetic-it-support-tickets)
+by **Muhammad Ahsan**, licensed under
+[Creative Commons Attribution 4.0 International (CC BY 4.0)](https://creativecommons.org/licenses/by/4.0/).
+The original dataset archive is redistributed with attribution; it contains no
+separate notice file. The pinned archive is 3,722,979 bytes with SHA-256
+`036a619b419c4cc9dc5d5b8fe776fdf0e74be456bd053c7080c2aa34e315d909`.
+Provisioning uses this packaged copy, not a Kaggle download or participant
+credentials.
+
+The source contains 100,000 unique ticket IDs and 20 columns. Provisioning
+adapts the CSV into ten 10,000-row UTF-8 shards, repeating the header and
+normalizing line endings to LF; the ticket values are otherwise unchanged.
+The shards stay below the [Search Basic blob-indexer limit](https://learn.microsoft.com/en-us/azure/search/search-limits-quotas-capacity#indexer-limits).
+They are uploaded under `baseline/dataset-v1/`. Reserve that prefix for this
+dataset: unexpected blobs there stop provisioning rather than being indexed or
+deleted. Other container paths are untouched.
+
+`bootcamp-baseline-v1` is a full-text index containing all 20 source columns
+as strings, with `ticket_id` as the stable document key. The data source
+contains only `ResourceId=<storage resource ID>;` in the Search API's
+`credentials.connectionString` property; no secret is present. With no
+user-assigned identity specified, the indexer reads the container as the Search
+system-assigned identity. This baseline does **not** precompute embeddings:
+the existing `bootcamp-embedding` deployment and the Search identity's Foundry
+role remain available for lab-specific vectorization. Any later embedding
+skill or vectorizer must likewise use managed identity, without an API key.
+
+Blob uploads and Search object creation are create-only. Existing shards are
+checked against their expected size and hashes; existing Search definitions
+must remain compatible. Participant-added index fields and unrelated resources
+are preserved. An incompatible blob, data source, index, or indexer fails
+explicitly and is never replaced. If the indexer is missing while the index
+already contains documents, provisioning stops rather than recreating an
+indexer that could overwrite participant edits. A rerun does not reset the
+indexer; it starts an incremental run only when an existing index is incomplete,
+and publishes credentials only after a successful run, at least 100,000 indexed
+documents, and a known-ticket full-text query. Indexer errors are reported to the operator.
+RBAC-related HTTP failures are retried for up to approximately ten minutes per
+request; indexer polling spans approximately one hour, plus request retries.
+Do not delete or reset participant resources to recover a failure.
 
 `ProjectManagedIdentity` is accepted by the Foundry resource provider and SDK
 but is not yet in the published `2025-06-01` Bicep types, so the template
@@ -172,7 +221,8 @@ supported way to recover an environment.
 
 ## Participant values
 
-Only after complete successful deployment, the hook emits eight separate
+Only after complete successful deployment and baseline verification, the hook
+emits nine separate
 `HackboxCredential` **hashtables**, each with `name` and `value`:
 
 | Name | Value |
@@ -185,6 +235,7 @@ Only after complete successful deployment, the hook emits eight separate
 | `SearchEndpoint` | `https://<search>.search.windows.net` |
 | `StorageAccountName` | Participant storage account |
 | `StorageBaselineContainerName` | `baseline` |
+| `BaselineIndexName` | `bootcamp-baseline-v1` |
 
 `labautomation` is not participant download material. Guides consume these
 dashboard values; they must not direct participants to run provisioning.
@@ -200,16 +251,19 @@ az bicep lint --file labautomation\foundry-core.bicep
 ```
 
 Tests invoke the real hook, substituting only platform/Azure external commands,
-and compile/inspect the ARM deployment artifact without deploying it. They
+including a simulated Storage/Search data plane, and compile/inspect the ARM
+deployment artifact without deploying it. They
 exercise region input/order, organizer gating, in-place reruns, platform scope
 and identity inputs, pre-existing RG metadata/access preservation, success-only
-credential publication and declared keyless resources/models.
+credential publication, the pinned source archive, safe dataset sharding,
+indexer/query readiness, and declared keyless resources/models.
 Compilation checks schema/types, not subscription
 policy, live availability, quota or runtime endpoint contents.
 
 **Not observed:** a live MicroHack hook run, cloud deployment/ARM validation,
 initial region exhaustion, actual Entra inference/RBAC propagation, runtime
-project endpoint, Search/Storage data-plane access, trace ingestion through the
+project endpoint, live Search/Storage upload, indexing and participant queries,
+trace ingestion through the
 `ProjectManagedIdentity` connection, participant dashboard rendering and retention of participant
 work across a live rerun. These require explicit authorization for an
 organizer-owned disposable environment. Do not equate the local tests or a
@@ -233,4 +287,8 @@ content-pack import with those acceptance checks.
 - [Foundry AI Search tool keyless roles](https://learn.microsoft.com/en-us/azure/foundry/agents/how-to/tools/ai-search),
   [AI Search RBAC](https://learn.microsoft.com/en-us/azure/search/search-security-rbac)
   and [Entra trace ingestion](https://learn.microsoft.com/en-us/azure/foundry/observability/how-to/trace-ingestion-entra-authentication),
+  read 2026-11-25.
+- [Blob indexer CSV parsing](https://learn.microsoft.com/en-us/azure/search/search-how-to-index-azure-blob-csv),
+  [managed-identity Storage access](https://learn.microsoft.com/en-us/azure/search/search-howto-managed-identities-storage)
+  and [indexer status](https://learn.microsoft.com/en-us/azure/search/search-monitor-indexers),
   read 2026-11-25.

@@ -34,10 +34,38 @@ if (-not $context -or $context.Subscription.Id -ne $SubscriptionId) {
     throw 'The authenticated subscription must match SubscriptionId. MicroHack must supply the authenticated context.'
 }
 
+$armToken = (Get-AzAccessToken -ResourceUrl 'https://management.azure.com/').Token
+$tokenText = if ($armToken -is [securestring]) {
+    [System.Net.NetworkCredential]::new('', $armToken).Password
+} elseif ($armToken -is [string]) {
+    $armToken
+} else {
+    throw 'The authenticated provisioner token is unavailable.'
+}
+$parts = $tokenText -split '\.'
+if ($parts.Count -ne 3 -or $parts[1] -notmatch '^[A-Za-z0-9_-]+$') {
+    throw 'The authenticated provisioner token does not contain a valid object ID.'
+}
+try {
+    $payload = $parts[1].Replace('-', '+').Replace('_', '/')
+    $payload += '=' * ((4 - $payload.Length % 4) % 4)
+    $claims = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($payload)) |
+        ConvertFrom-Json -AsHashtable -ErrorAction Stop
+    $provisionerId = [guid]::Empty
+    if (-not $claims.ContainsKey('oid') -or -not [guid]::TryParse($claims.oid, [ref]$provisionerId) -or
+        $provisionerId -eq [guid]::Empty) {
+        throw 'Missing object ID.'
+    }
+} catch {
+    throw 'The authenticated provisioner token does not contain a valid object ID.'
+} finally {
+    Remove-Variable armToken, tokenText, parts -ErrorAction SilentlyContinue
+}
+
 $group = Get-AzResourceGroup | Where-Object { $_.ResourceGroupName -eq $ResourceGroupName }
 $resources = @(if ($group) { Get-AzResource -ResourceGroupName $ResourceGroupName })
 $template = Join-Path $PSScriptRoot 'foundry-core.bicep'
-$parameters = @{ participantObjectIds = $AllowedEntraUserIds }
+$parameters = @{ participantObjectIds = $AllowedEntraUserIds; provisionerObjectId = $provisionerId.ToString() }
 
 # The MicroHack helper can delete the entire RG on recycle, including same-region retries.
 if ($env:BOOTCAMP_ORGANIZER_INITIAL_PROVISIONING -ceq 'true' -and $resources.Count -eq 0) {
@@ -112,6 +140,16 @@ if ([string]::IsNullOrWhiteSpace($result.LocationUsed)) {
     throw 'Foundry core deployment is missing required output Region. No credentials were published.'
 }
 
+$baselineIndexName = & (Join-Path $PSScriptRoot 'provision-baseline.ps1') `
+    -StorageAccountName $result.Outputs.StorageAccountName `
+    -ContainerName $result.Outputs.StorageBaselineContainerName `
+    -SubscriptionId $SubscriptionId `
+    -ResourceGroupName $ResourceGroupName `
+    -SearchEndpoint $result.Outputs.SearchEndpoint
+if ([string]::IsNullOrWhiteSpace($baselineIndexName)) {
+    throw 'Baseline indexing did not return an index name. No credentials were published.'
+}
+
 $values = [ordered]@{
     ResourceGroupName = $ResourceGroupName
     Region = $result.LocationUsed
@@ -121,6 +159,7 @@ $values = [ordered]@{
     SearchEndpoint = $result.Outputs.SearchEndpoint
     StorageAccountName = $result.Outputs.StorageAccountName
     StorageBaselineContainerName = $result.Outputs.StorageBaselineContainerName
+    BaselineIndexName = $baselineIndexName
 }
 foreach ($name in $values.Keys) {
     @{ HackboxCredential = @{ name = $name; value = $values[$name] } }

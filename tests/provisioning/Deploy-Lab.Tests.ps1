@@ -1,6 +1,8 @@
 BeforeAll {
+    . (Join-Path $PSScriptRoot 'Fake-AzureDataPlane.ps1')
     $script:Hook = Join-Path $PSScriptRoot '..\..\labautomation\deploy-lab.ps1'
     function Get-AzContext {}
+    function Get-AzAccessToken { param($ResourceUrl) }
     function Get-AzResourceGroup {}
     function Get-AzResource { param($ResourceGroupName) }
     function Get-MhhStableHash { param($InputString, $Length) }
@@ -35,6 +37,33 @@ BeforeAll {
     }
 }
 
+Describe 'Shared baseline dataset' {
+    It 'provides the complete verified dataset without a Kaggle download' {
+        $path = Join-Path $PSScriptRoot '..\..\labautomation\dataset\synthetic-it-support-tickets-v1.zip'
+        $path | Should -Exist
+        (Get-FileHash -Algorithm SHA256 $path).Hash |
+            Should -Be '036A619B419C4CC9DC5D5B8FE776FDF0E74BE456BD053C7080C2AA34E315D909'
+
+        $archive = [System.IO.Compression.ZipFile]::OpenRead($path)
+        try {
+            $archive.Entries.Count | Should -Be 1
+            $archive.Entries[0].FullName | Should -Be 'synthetic_it_support_tickets.csv'
+            $archive.Entries[0].Length | Should -Be 34521641
+            $reader = [System.IO.StreamReader]::new($archive.Entries[0].Open())
+            try {
+                $reader.ReadLine() | Should -Match '^ticket_id,created_at,'
+                $rows = 0
+                while ($null -ne $reader.ReadLine()) { $rows++ }
+                $rows | Should -Be 100000
+            } finally {
+                $reader.Dispose()
+            }
+        } finally {
+            $archive.Dispose()
+        }
+    }
+}
+
 Describe 'MicroHack Foundry provisioning hook' {
     BeforeEach {
         $script:PreviousOptIn = $env:BOOTCAMP_ORGANIZER_INITIAL_PROVISIONING
@@ -47,6 +76,16 @@ Describe 'MicroHack Foundry provisioning hook' {
             AllowedEntraUserIds = @('00000000-0000-0000-0000-000000000002')
         }
         Mock Get-AzContext { @{ Subscription = @{ Id = '00000000-0000-0000-0000-000000000001' } } }
+        Mock Get-AzAccessToken {
+            $payload = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes(
+                '{"oid":"00000000-0000-0000-0000-000000000003"}')).TrimEnd('=').Replace('+', '-').Replace('/', '_')
+            @{ Token = ConvertTo-SecureString "e30.$payload.signature" -AsPlainText -Force }
+        }
+        $global:ProvisioningTestDataPlane = New-FakeAzureDataPlane
+        Mock Invoke-WebRequest {
+            Invoke-FakeAzureDataPlane -Uri $Uri -Method $Method -Headers $Headers -Body $Body -State $global:ProvisioningTestDataPlane
+        }
+        Mock Start-Sleep {}
         Mock Get-AzResourceGroup {
             @{
                 ResourceGroupName = 'participant'
@@ -102,6 +141,7 @@ Describe 'MicroHack Foundry provisioning hook' {
 
     AfterEach {
         $env:BOOTCAMP_ORGANIZER_INITIAL_PROVISIONING = $script:PreviousOptIn
+        Remove-Variable -Name ProvisioningTestDataPlane -Scope Global -ErrorAction SilentlyContinue
     }
 
     It 'rejects missing platform regions before contacting Azure' {
@@ -117,7 +157,7 @@ Describe 'MicroHack Foundry provisioning hook' {
             $RgOwnerEntraObjectIds[0] -eq '00000000-0000-0000-0000-000000000002' -and
             $TemplateParameterObject.participantObjectIds[0] -eq '00000000-0000-0000-0000-000000000002'
         }
-        $credentials.Count | Should -Be 8
+        $credentials.Count | Should -Be 9
         $values = @{}
         foreach ($credential in $credentials) {
             $credential | Should -BeOfType [hashtable]
@@ -131,6 +171,7 @@ Describe 'MicroHack Foundry provisioning hook' {
         $values.SearchEndpoint | Should -Be 'https://srch.example.search.windows.net'
         $values.StorageAccountName | Should -Be 'stexample'
         $values.StorageBaselineContainerName | Should -Be 'baseline'
+        $values.BaselineIndexName | Should -Be 'bootcamp-baseline-v1'
     }
 
     It 'never calls destructive fallback on a populated RG even with organizer opt-in' {
@@ -316,6 +357,147 @@ Describe 'MicroHack Foundry provisioning hook' {
         $published.Count | Should -Be 0
     }
 
+    It 'publishes nothing when the provisioner cannot upload the baseline dataset' {
+        Mock Invoke-WebRequest { [pscustomobject]@{ StatusCode = 403; Content = 'Forbidden'; Headers = @{} } }
+        Mock Start-Sleep {}
+        $published = [System.Collections.Generic.List[object]]::new()
+        { & $script:Hook @script:Inputs | ForEach-Object { $published.Add($_) } } |
+            Should -Throw '*baseline*403*'
+        $published.Count | Should -Be 0
+    }
+
+    It 'uploads every ticket and publishes the name of a queryable keyless baseline index' {
+        $credentials = @(& $script:Hook @script:Inputs)
+        $indexName = ($credentials | Where-Object { $_.HackboxCredential.name -eq 'BaselineIndexName' }).HackboxCredential.value
+        $indexName | Should -Be 'bootcamp-baseline-v1'
+        $global:ProvisioningTestDataPlane.Blobs.Count | Should -Be 10
+        ($global:ProvisioningTestDataPlane.Blobs.Values | Measure-Object -Property Rows -Sum).Sum | Should -Be 100000
+        @($global:ProvisioningTestDataPlane.Blobs.Values | Where-Object { $_.Length -gt 15MB }).Count | Should -Be 0
+        $global:ProvisioningTestDataPlane.IndexedRows | Should -Be 100000
+        $source = $global:ProvisioningTestDataPlane.Search.datasources['bootcamp-baseline-v1-source']
+        $source.container.name | Should -Be 'baseline'
+        $source.container.query | Should -Be 'dataset-v1/'
+        $source.credentials.connectionString |
+            Should -Be 'ResourceId=/subscriptions/00000000-0000-0000-0000-000000000001/resourceGroups/participant/providers/Microsoft.Storage/storageAccounts/stexample;'
+        $source.identity | Should -BeNullOrEmpty
+        $indexer = $global:ProvisioningTestDataPlane.Search.indexers['bootcamp-baseline-v1-indexer']
+        $indexer.parameters.configuration.parsingMode | Should -Be 'delimitedText'
+        $indexer.parameters.configuration.firstLineContainsHeaders | Should -BeTrue
+        $indexer.targetIndexName | Should -Be $indexName
+    }
+
+    It 'refuses an unexpected blob in the reserved dataset prefix without deleting it' {
+        $foreignBlob = @{ Length = 42; Rows = 1; Hash = 'participant-data'; Md5 = 'participant-data' }
+        $global:ProvisioningTestDataPlane.Blobs['/baseline/dataset-v1/participant.csv'] = $foreignBlob
+        $published = [System.Collections.Generic.List[object]]::new()
+        { & $script:Hook @script:Inputs | ForEach-Object { $published.Add($_) } } |
+            Should -Throw '*unexpected blob*'
+        $published.Count | Should -Be 0
+        $global:ProvisioningTestDataPlane.Blobs['/baseline/dataset-v1/participant.csv'] | Should -Be $foreignBlob
+        $global:ProvisioningTestDataPlane.Search.indexers.Count | Should -Be 0
+    }
+
+    It 'does not publish credentials and reports the indexing error when retries cannot recover' {
+        $global:ProvisioningTestDataPlane.IndexerResult = @{
+            status = 'transientFailure'
+            startTime = '2026-11-25T13:00:00Z'
+            errorMessage = 'Search identity cannot read the baseline container'
+            itemsFailed = 1
+            errors = @()
+        }
+        $published = [System.Collections.Generic.List[object]]::new()
+        { & $script:Hook @script:Inputs | ForEach-Object { $published.Add($_) } } |
+            Should -Throw '*Search identity cannot read the baseline container*'
+        $published.Count | Should -Be 0
+    }
+
+    It 'recovers from a transient indexer failure with only item-level diagnostics' {
+        $state = $global:ProvisioningTestDataPlane
+        $state.IndexerResult = @{
+            status = 'transientFailure'
+            startTime = '2026-11-25T13:00:00Z'
+            itemsFailed = 1
+            errors = @(@{ statusCode = 403; errorMessage = 'Role assignment is not effective yet' })
+        }
+        $state.RecoveryResult = @{ status = 'success'; itemsFailed = 0; errors = @() }
+        $credentials = @(& $script:Hook @script:Inputs)
+        ($credentials | Where-Object { $_.HackboxCredential.name -eq 'BaselineIndexName' }).HackboxCredential.value |
+            Should -Be 'bootcamp-baseline-v1'
+        @($state.Requests | Where-Object { $_.Uri -match '/search\.run\?' }).Count | Should -Be 1
+    }
+
+    It 'preserves existing participant work on a <Scenario> rerun' -ForEach @(
+        @{ Scenario = 'compatible' }
+        @{ Scenario = 'modified key mapping' }
+    ) {
+        $env:BOOTCAMP_ORGANIZER_INITIAL_PROVISIONING = $null
+        Mock Get-AzResource { @{ ResourceType = 'Microsoft.Search/searchServices' } }
+        & $script:Hook @script:Inputs | Out-Null
+        $state = $global:ProvisioningTestDataPlane
+        $state.Search.indexes['participant-lab-index'] = @{ name = 'participant-lab-index'; custom = 'keep' }
+        $state.Search.indexes['bootcamp-baseline-v1'].fields += @{
+            name = 'participant_notes'; type = 'Edm.String'; searchable = $true; retrievable = $true
+        }
+        if ($Scenario -eq 'modified key mapping') {
+            $state.Search.indexers['bootcamp-baseline-v1-indexer'].fieldMappings[0].mappingFunction = @{ name = 'base64Encode' }
+        }
+        $before = $state.Requests.Count
+        if ($Scenario -eq 'compatible') {
+            $credentials = @(& $script:Hook @script:Inputs)
+            ($credentials | Where-Object { $_.HackboxCredential.name -eq 'BaselineIndexName' }).HackboxCredential.value |
+                Should -Be 'bootcamp-baseline-v1'
+        } else {
+            $published = [System.Collections.Generic.List[object]]::new()
+            { & $script:Hook @script:Inputs | ForEach-Object { $published.Add($_) } } |
+                Should -Throw '*incompatible*not overwritten*'
+            $published.Count | Should -Be 0
+        }
+        $state.Search.indexes['participant-lab-index'].custom | Should -Be 'keep'
+        @($state.Search.indexes['bootcamp-baseline-v1'].fields | Where-Object name -eq 'participant_notes').Count |
+            Should -Be 1
+        @($state.Requests | Select-Object -Skip $before | Where-Object {
+            $_.Method -in @('Put', 'Delete') -or $_.Uri -match '/search\.run\?'
+        }).Count | Should -Be 0
+    }
+
+    It 'does not recreate a missing indexer over a populated baseline index on rerun' {
+        & $script:Hook @script:Inputs | Out-Null
+        $state = $global:ProvisioningTestDataPlane
+        $state.Search.indexers.Remove('bootcamp-baseline-v1-indexer')
+        $state.Search.indexes['bootcamp-baseline-v1'].fields += @{
+            name = 'participant_notes'; type = 'Edm.String'; searchable = $true; retrievable = $true
+        }
+        $before = $state.Requests.Count
+        $published = [System.Collections.Generic.List[object]]::new()
+        { & $script:Hook @script:Inputs | ForEach-Object { $published.Add($_) } } |
+            Should -Throw '*indexer*missing*populated*'
+        $published.Count | Should -Be 0
+        @($state.Search.indexes['bootcamp-baseline-v1'].fields | Where-Object name -eq 'participant_notes').Count |
+            Should -Be 1
+        @($state.Requests | Select-Object -Skip $before | Where-Object {
+            $_.Method -in @('Put', 'Delete') -or $_.Uri -match '/search\.run\?'
+        }).Count | Should -Be 0
+    }
+
+    It 'rejects an incompatible existing <Resource> without replacing it' -ForEach @(
+        @{ Resource = 'blob'; Message = '*different content*not overwritten*' }
+        @{ Resource = 'data source'; Message = '*datasources*incompatible*not overwritten*' }
+    ) {
+        & $script:Hook @script:Inputs | Out-Null
+        $state = $global:ProvisioningTestDataPlane
+        if ($Resource -eq 'blob') {
+            $state.Blobs['/baseline/dataset-v1/part-000.csv'].Hash = 'participant-edited'
+        } else {
+            $state.Search.datasources['bootcamp-baseline-v1-source'].Remove('credentials')
+        }
+        $before = $state.Requests.Count
+        $published = [System.Collections.Generic.List[object]]::new()
+        { & $script:Hook @script:Inputs | ForEach-Object { $published.Add($_) } } | Should -Throw $Message
+        $published.Count | Should -Be 0
+        @($state.Requests | Select-Object -Skip $before | Where-Object { $_.Method -in @('Put', 'Delete') }).Count |
+            Should -Be 0
+    }
+
     It 'publishes nothing if a successful deployment omits required output' {
         Mock Invoke-MhhDeploymentWithRegionFallback {
             @{ Success = $true; LocationUsed = 'region-first'; Outputs = @{ ChatDeploymentName = 'chat' } }
@@ -429,6 +611,24 @@ Describe 'MicroHack Foundry provisioning hook' {
             $grant[0].Scope | Should -Match $expected.Scope
         }
         $grants.Count | Should -Be 4
+    }
+
+    It 'grants the authenticated provisioner the scoped access needed to load and verify the baseline' {
+        $grants = @(Get-RoleGrants (Get-CompiledCore).Arm |
+            Where-Object Principal -Match "parameters\('provisionerObjectId'\)")
+        foreach ($expected in @(
+            @{ Role = 'ba92f5b4-2d11-453d-a403-e96b0029c9fe'; Scope = 'Microsoft.Storage/storageAccounts' }
+            @{ Role = '7ca78c08-252a-4471-8644-bb5ff32d4ba0'; Scope = 'Microsoft.Search/searchServices' }
+            @{ Role = '1407120a-92aa-4202-b7e9-c0e197c71c8f'; Scope = 'Microsoft.Search/searchServices' }
+        )) {
+            @($grants | Where-Object { $_.Role -match $expected.Role -and $_.Scope -match $expected.Scope }).Count |
+                Should -Be 1
+        }
+
+        & $script:Hook @script:Inputs | Out-Null
+        Should -Invoke Invoke-MhhDeploymentWithRegionFallback -Times 1 -Exactly -ParameterFilter {
+            $TemplateParameterObject.provisionerObjectId -eq '00000000-0000-0000-0000-000000000003'
+        }
     }
 
     It 'binds workload managed identities to scoped Search, Foundry and Storage roles' {

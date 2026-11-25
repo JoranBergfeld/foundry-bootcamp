@@ -7,6 +7,10 @@ param location string = resourceGroup().location
 @description('Participant Entra user object IDs supplied by MicroHack.')
 param participantObjectIds array
 
+@minLength(1)
+@description('Object ID of the authenticated MicroHack provisioner.')
+param provisionerObjectId string
+
 var accountName = 'foundry-${uniqueString(resourceGroup().id)}'
 var projectName = 'bootcamp'
 var searchName = 'srch-${uniqueString(resourceGroup().id)}'
@@ -18,9 +22,11 @@ var azureAiUserRoleId = subscriptionResourceId('Microsoft.Authorization/roleDefi
 var monitoringMetricsPublisherRoleId = subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '3913510d-42f4-4e42-8a64-420c390055eb')
 var searchServiceContributorRoleId = subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '7ca78c08-252a-4471-8644-bb5ff32d4ba0')
 var searchIndexDataContributorRoleId = subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '8ebe5a00-799e-43f5-93ac-243d3dce84a7')
+var searchIndexDataReaderRoleId = subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '1407120a-92aa-4202-b7e9-c0e197c71c8f')
 var storageBlobDataContributorRoleId = subscriptionResourceId('Microsoft.Authorization/roleDefinitions', 'ba92f5b4-2d11-453d-a403-e96b0029c9fe')
 var storageBlobDataReaderRoleId = subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '2a2b9908-6ea1-4ae2-8e65-a410df84e7d1')
 var openAiUserRoleId = subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '5e0bd9bd-7b93-4f28-af87-19fc36ad61bd')
+var provisionerIsParticipant = contains(map(participantObjectIds, participantId => toLower(participantId)), toLower(provisionerObjectId))
 
 resource account 'Microsoft.CognitiveServices/accounts@2025-06-01' = {
   name: accountName
@@ -235,6 +241,33 @@ resource participantBlobData 'Microsoft.Authorization/roleAssignments@2022-04-01
     principalType: 'User'
   }
 }]
+
+resource provisionerSearchService 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (!provisionerIsParticipant) {
+  name: guid(search.id, provisionerObjectId, searchServiceContributorRoleId)
+  scope: search
+  properties: {
+    roleDefinitionId: searchServiceContributorRoleId
+    principalId: provisionerObjectId
+  }
+}
+
+resource provisionerSearchData 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (!provisionerIsParticipant) {
+  name: guid(search.id, provisionerObjectId, searchIndexDataReaderRoleId)
+  scope: search
+  properties: {
+    roleDefinitionId: searchIndexDataReaderRoleId
+    principalId: provisionerObjectId
+  }
+}
+
+resource provisionerBlobData 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (!provisionerIsParticipant) {
+  name: guid(storage.id, provisionerObjectId, storageBlobDataContributorRoleId)
+  scope: storage
+  properties: {
+    roleDefinitionId: storageBlobDataContributorRoleId
+    principalId: provisionerObjectId
+  }
+}
 
 // The Foundry AI Search tool authenticates keylessly with the account identity; project-scoped
 // connections use the project identity. Both get the documented Search roles.
