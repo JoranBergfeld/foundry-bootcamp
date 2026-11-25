@@ -2,8 +2,8 @@
 
 Six one-hour sessions share one participant environment. Each lab is independent
 and has a 40-45-minute follow-along; scene-setting and recap are outside it.
-The guides are skeletons: exercises are not yet ready. Shared provisioning of the
-participant environment is in place (see `labautomation/README.md`).
+Shared provisioning of the participant environment is in place (see
+`labautomation/README.md`). Only the lab exercises remain placeholders.
 
 ## Labs
 
