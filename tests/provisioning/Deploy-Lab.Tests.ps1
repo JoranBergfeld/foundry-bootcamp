@@ -386,6 +386,51 @@ Describe 'MicroHack Foundry provisioning hook' {
         $indexer.targetIndexName | Should -Be $indexName
     }
 
+    It 'configures matching keyless ticket embeddings and query vectorization' {
+        & $script:Hook @script:Inputs | Out-Null
+        $state = $global:ProvisioningTestDataPlane
+        $index = $state.Search.indexes['bootcamp-baseline-v1']
+        $vector = @($index.fields | Where-Object name -eq 'ticket_vector')
+        $vector.Count | Should -Be 1
+        $vector[0].type | Should -Be 'Collection(Edm.Single)'
+        $vector[0].dimensions | Should -Be 1536
+        $vector[0].vectorSearchProfile | Should -Be 'baseline-vector-profile'
+        $index.vectorSearch.profiles[0].vectorizer | Should -Be 'baseline-vectorizer'
+        $parameters = $index.vectorSearch.vectorizers[0].azureOpenAIParameters
+        $parameters.resourceUri | Should -Be 'https://foundry.example'
+        $parameters.deploymentId | Should -Be 'bootcamp-embedding'
+        $parameters.modelName | Should -Be 'text-embedding-3-small'
+        $parameters.apiKey | Should -BeNullOrEmpty
+        $parameters.authIdentity | Should -BeNullOrEmpty
+        $skillset = $state.Search.skillsets['bootcamp-baseline-v1-embeddings']
+        $skill = $skillset.skills[0]
+        $skill.'@odata.type' | Should -Be '#Microsoft.Skills.Text.AzureOpenAIEmbeddingSkill'
+        $skill.resourceUri | Should -Be $parameters.resourceUri
+        $skill.deploymentId | Should -Be $parameters.deploymentId
+        $skill.modelName | Should -Be $parameters.modelName
+        $skill.dimensions | Should -Be 1536
+        $skill.inputs[0].source | Should -Be '/document/initial_message'
+        $skill.apiKey | Should -BeNullOrEmpty
+        $skill.authIdentity | Should -BeNullOrEmpty
+        $indexer = $state.Search.indexers['bootcamp-baseline-v1-indexer']
+        $indexer.skillsetName | Should -Be $skillset.name
+        $indexer.outputFieldMappings[0].sourceFieldName | Should -Be '/document/ticket_vector/*'
+        $indexer.outputFieldMappings[0].targetFieldName | Should -Be 'ticket_vector'
+        $state.VerifiedVectorIds.Count | Should -Be 100000
+        $queries = @($state.Requests | Where-Object { $_.Uri -match '/docs/search\.post\.search\?' } |
+            ForEach-Object { $_.Body | ConvertFrom-Json -AsHashtable })
+        @($queries | Where-Object { $_.ContainsKey('vectorQueries') -and $_.vectorQueries[0].kind -eq 'text' }).Count |
+            Should -Be 1
+    }
+
+    It 'withholds credentials when a late baseline ticket has no vector despite successful indexing' {
+        $null = $global:ProvisioningTestDataPlane.MissingVectorIds.Add('TCKT_099999')
+        $published = [System.Collections.Generic.List[object]]::new()
+        { & $script:Hook @script:Inputs | ForEach-Object { $published.Add($_) } } |
+            Should -Throw '*vector*missing*TCKT_099999*'
+        $published.Count | Should -Be 0
+    }
+
     It 'refuses an unexpected blob in the reserved dataset prefix without deleting it' {
         $foreignBlob = @{ Length = 42; Rows = 1; Hash = 'participant-data'; Md5 = 'participant-data' }
         $global:ProvisioningTestDataPlane.Blobs['/baseline/dataset-v1/participant.csv'] = $foreignBlob
@@ -429,6 +474,7 @@ Describe 'MicroHack Foundry provisioning hook' {
     It 'preserves existing participant work on a <Scenario> rerun' -ForEach @(
         @{ Scenario = 'compatible' }
         @{ Scenario = 'modified key mapping' }
+        @{ Scenario = 'modified vector mapping' }
     ) {
         $env:BOOTCAMP_ORGANIZER_INITIAL_PROVISIONING = $null
         Mock Get-AzResource { @{ ResourceType = 'Microsoft.Search/searchServices' } }
@@ -440,6 +486,8 @@ Describe 'MicroHack Foundry provisioning hook' {
         }
         if ($Scenario -eq 'modified key mapping') {
             $state.Search.indexers['bootcamp-baseline-v1-indexer'].fieldMappings[0].mappingFunction = @{ name = 'base64Encode' }
+        } elseif ($Scenario -eq 'modified vector mapping') {
+            $state.Search.indexers['bootcamp-baseline-v1-indexer'].outputFieldMappings[0].mappingFunction = @{ name = 'base64Encode' }
         }
         $before = $state.Requests.Count
         if ($Scenario -eq 'compatible') {

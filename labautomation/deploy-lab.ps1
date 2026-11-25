@@ -145,7 +145,9 @@ $baselineIndexName = & (Join-Path $PSScriptRoot 'provision-baseline.ps1') `
     -ContainerName $result.Outputs.StorageBaselineContainerName `
     -SubscriptionId $SubscriptionId `
     -ResourceGroupName $ResourceGroupName `
-    -SearchEndpoint $result.Outputs.SearchEndpoint
+    -SearchEndpoint $result.Outputs.SearchEndpoint `
+    -EmbeddingEndpoint ([uri]$result.Outputs.FoundryProjectEndpoint).GetLeftPart([UriPartial]::Authority) `
+    -EmbeddingDeploymentName $result.Outputs.EmbeddingDeploymentName
 if ([string]::IsNullOrWhiteSpace($baselineIndexName)) {
     throw 'Baseline indexing did not return an index name. No credentials were published.'
 }

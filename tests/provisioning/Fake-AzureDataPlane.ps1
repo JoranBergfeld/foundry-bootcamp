@@ -1,11 +1,13 @@
 function New-FakeAzureDataPlane {
     @{
         Blobs = @{}
-        Search = @{ indexes = @{}; datasources = @{}; indexers = @{} }
+        Search = @{ indexes = @{}; datasources = @{}; indexers = @{}; skillsets = @{} }
         Requests = [System.Collections.Generic.List[object]]::new()
         IndexerResult = @{ status = 'success'; itemsFailed = 0; errors = @(); warnings = @() }
         RecoveryResult = $null
         IndexedRows = 0
+        MissingVectorIds = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
+        VerifiedVectorIds = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
     }
 }
 
@@ -75,7 +77,7 @@ function Invoke-FakeAzureDataPlane {
     }
 
     if ($url.Host -eq 'srch.example.search.windows.net') {
-        if ($url.AbsolutePath -notmatch "^/(indexes|datasources|indexers)\('([^']+)'\)(?:/(.+))?$") {
+        if ($url.AbsolutePath -notmatch "^/(indexes|datasources|indexers|skillsets)\('([^']+)'\)(?:/(.+))?$") {
             throw "Unexpected Search request: $methodName $url"
         }
         $kind, $name, $action = $Matches[1], $Matches[2], $Matches[3]
@@ -94,7 +96,41 @@ function Invoke-FakeAzureDataPlane {
             return [pscustomobject]@{ StatusCode = 200; Content = [string]$State.IndexedRows; Headers = @{} }
         }
         if ($action -eq 'docs/search.post.search' -and $methodName -eq 'Post') {
+            $query = [Text.Encoding]::UTF8.GetString($Body) | ConvertFrom-Json -AsHashtable
+            if ($query.ContainsKey('vectorQueries') -and $query.vectorQueries[0].kind -eq 'vector') {
+                if ($query.vectorFilterMode -ne 'preFilter' -or
+                    $query.vectorQueries[0].exhaustive -ne $true -or
+                    $query.vectorQueries[0].fields -ne 'ticket_vector' -or
+                    $query.vectorQueries[0].vector.Count -ne 1536 -or
+                    $query.ContainsKey('search')) {
+                    throw 'Coverage must use a pure exhaustive prefiltered vector query.'
+                }
+                if ($query.filter -notmatch "^search\.in\(ticket_id, '([^']+)', ','\)$") {
+                    throw 'Coverage must filter by exact expected ticket IDs.'
+                }
+                $ids = $Matches[1] -split ','
+                if ($query.vectorQueries[0].k -lt $ids.Count -or $query.top -lt $ids.Count) {
+                    throw 'Coverage must request every ticket in the filtered batch.'
+                }
+                $documents = @(
+                    foreach ($id in $ids) {
+                        if (-not $State.MissingVectorIds.Contains($id)) {
+                            $null = $State.VerifiedVectorIds.Add($id)
+                            @{ ticket_id = $id }
+                        }
+                    }
+                )
+                return [pscustomobject]@{
+                    StatusCode = 200
+                    Content = (@{ value = $documents } | ConvertTo-Json -Depth 20 -Compress)
+                    Headers = @{}
+                }
+            }
             $sample = $State.Blobs['/baseline/dataset-v1/part-000.csv'].Sample
+            if ($query.ContainsKey('vectorQueries')) {
+                $sample = @{ ticket_id = $sample.ticket_id; initial_message = $sample.initial_message }
+                $sample.ticket_vector = @(1.0) + [double[]]::new(1535)
+            }
             $result = @{ value = @($sample) }
             return [pscustomobject]@{ StatusCode = 200; Content = ($result | ConvertTo-Json -Depth 20 -Compress); Headers = @{} }
         }

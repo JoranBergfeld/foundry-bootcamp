@@ -108,7 +108,7 @@ idempotent):
 | Foundry project MI | Search Service Contributor, Search Index Data Contributor | Search | `bootcamp-search` project-identity connection |
 | Foundry project MI | Monitoring Metrics Publisher | Application Insights | Keyless trace ingestion |
 | Search MI | Storage Blob Data Reader | Storage | Indexer reads `baseline` (#17) |
-| Search MI | Cognitive Services OpenAI User | Foundry account | Available for keyless integrated vectorization in labs |
+| Search MI | Cognitive Services OpenAI User | Foundry account | Baseline embedding skill and query vectorizer |
 | Provisioner | Storage Blob Data Contributor | Storage | Upload and verify the baseline |
 | Provisioner | Search Service Contributor, Search Index Data Reader | Search | Create the indexer and verify queries |
 
@@ -136,29 +136,133 @@ They are uploaded under `baseline/dataset-v1/`. Reserve that prefix for this
 dataset: unexpected blobs there stop provisioning rather than being indexed or
 deleted. Other container paths are untouched.
 
-`bootcamp-baseline-v1` is a full-text index containing all 20 source columns
-as strings, with `ticket_id` as the stable document key. The data source
+`bootcamp-baseline-v1` contains all 20 source columns as strings, with `ticket_id`
+as the stable document key, plus `ticket_vector` (`Collection(Edm.Single)`,
+1536 dimensions, cosine HNSW). Each of the 100,000 tickets gets one embedding
+of its `initial_message`; replies, resolution text and metadata remain
+retrievable/full-text searchable but are not part of that vector. These
+43-79-character messages need no chunking.
+
+The data source
 contains only `ResourceId=<storage resource ID>;` in the Search API's
 `credentials.connectionString` property; no secret is present. With no
 user-assigned identity specified, the indexer reads the container as the Search
-system-assigned identity. This baseline does **not** precompute embeddings:
-the existing `bootcamp-embedding` deployment and the Search identity's Foundry
-role remain available for lab-specific vectorization. Any later embedding
-skill or vectorizer must likewise use managed identity, without an API key.
+system-assigned identity. The `bootcamp-baseline-v1-embeddings` skillset uses
+`bootcamp-embedding` (`text-embedding-3-small`, 1536 dimensions) on the Foundry
+account endpoint derived from `FoundryProjectEndpoint`. Both the skill and the
+matching `baseline-vectorizer` omit `apiKey` and `authIdentity`, selecting the
+Search system-assigned identity and its existing Foundry role.
 
-Blob uploads and Search object creation are create-only. Existing shards are
+Blob uploads and Search object creation (including the skillset) are create-only. Existing shards are
 checked against their expected size and hashes; existing Search definitions
 must remain compatible. Participant-added index fields and unrelated resources
-are preserved. An incompatible blob, data source, index, or indexer fails
+are preserved. An incompatible blob, data source, index, skillset or indexer fails
 explicitly and is never replaced. If the indexer is missing while the index
 already contains documents, provisioning stops rather than recreating an
 indexer that could overwrite participant edits. A rerun does not reset the
 indexer; it starts an incremental run only when an existing index is incomplete,
 and publishes credentials only after a successful run, at least 100,000 indexed
-documents, and a known-ticket full-text query. Indexer errors are reported to the operator.
+documents, and a known-ticket full-text query. It then verifies **every expected
+ticket ID** in 100 batches of pure exhaustive vector queries, prefiltered to
+1,000 exact IDs with `k=top=1000`. Vector-only results match on vector data,
+so missing vectors or missing tickets fail this check; participant-added
+documents cannot fill the gap. This avoids downloading 153.6 million floats.
+A final known-ticket hybrid query exercises the text vectorizer and checks its
+returned vector has 1536 dimensions. Missing coverage fails explicitly, without
+resetting the indexer or publishing credentials.
+
+On a complete, unchanged rerun, these checks are read-only apart from the one
+query-time embedding: source blobs are not rewritten, the indexer is not run,
+and the 100,000 document embeddings are not regenerated. An incremental run can
+resume unfinished work, but Azure can repeat work after its last checkpoint;
+do not treat recovery as a promise of zero repeat billing. A previously created
+full-text-only baseline is incompatible and is **not** automatically migrated,
+deleted or reset; an organizer must decide how to preserve any participant work
+before upgrading it.
+
+Indexer errors are reported to the operator.
 RBAC-related HTTP failures are retried for up to approximately ten minutes per
-request; indexer polling spans approximately one hour, plus request retries.
+request; indexer polling allows 24 hours of sleep intervals, plus request
+durations/retries and up to six transient-failure restarts. Long-running
+indexers may span multiple Azure execution windows; runs resume saved progress
+without reset. No recurring schedule is installed.
 Do not delete or reset participant resources to recover a failure.
+
+### Vector and hybrid queries
+
+Using a participant Entra bearer token for `https://search.azure.com/`, POST
+this body to
+`<SearchEndpoint>/indexes('<BaselineIndexName>')/docs/search.post.search?api-version=2025-09-01`:
+
+```json
+{
+  "search": "password",
+  "vectorQueries": [
+    {
+      "kind": "text",
+      "text": "I cannot sign in because my password is incorrect",
+      "fields": "ticket_vector",
+      "k": 10
+    }
+  ],
+  "select": "ticket_id,initial_message,resolution_summary",
+  "top": 10
+}
+```
+
+This is hybrid retrieval; omit `search` for vector-only retrieval. No
+participant model API key or client-side embedding call is needed.
+
+### Embedding volume, price and provisioning time
+
+Planning estimate checked **2026-11-25** for one participant environment:
+100,000 inputs, with **5,607,974 characters** total in `initial_message`.
+Using the rough English estimate of four characters per token gives
+**1,401,994 input tokens (about 1.4 million)**, or about 14 tokens per ticket.
+This is not a tokenizer measurement or a billing observation. There are only
+96 distinct messages, but this pipeline does not deduplicate tickets or assume
+model-side caching discounts: budget for all 100,000 inputs, plus retries and
+query embeddings.
+
+The [Azure Retail Prices API](https://prices.azure.com/api/retail/prices?$filter=armRegionName%20eq%20%27eastus%27%20and%20skuName%20eq%20%27text-embedding-3-small-glbl%27)
+returned the USD Global meter `text-embedding-3-small-glbl Tokens` at
+**$0.00002 per 1K tokens ($0.02 per million)**, effective 2024-06-01 and still
+returned on the check date. Estimated first-pass embedding cost:
+**1.401994 million x $0.02 = $0.02804 (about three US cents) per environment**.
+The [Azure pricing page](https://azure.microsoft.com/en-us/pricing/details/azure-openai/)
+and the actual event-region/offer meter govern billing; the illustrative
+East US lookup is not a region selection. No Batch API discount is assumed.
+Search uptime/vector storage, Storage, Foundry chat usage, tracing, taxes and
+retries are additional costs and can dominate this small embedding charge.
+Raw vectors alone occupy 614,400,000 bytes (about 586 MiB), before HNSW overhead
+and stored copies; preflight must leave capacity for lab indexes as well.
+
+**Capacity remains 10**, not ten parallel requests or ten PTUs. Azure maps
+capacity to model/SKU-specific TPM and RPM; the [quota guide](https://learn.microsoft.com/en-us/azure/foundry/openai/how-to/quota)
+warns those ratios differ by model. For conservative planning, **if** the
+deployment maps each unit to 1,000 TPM, capacity 10 means 10,000 TPM and this
+input volume alone takes **at least 140 minutes (2 hours 20 minutes)**. Budget
+several hours plus resource deployment, RBAC propagation, Search enrichment,
+index writes and coverage queries, not a one-hour setup. This is a
+token-throughput lower bound, not a measured runtime or guaranteed allocation.
+RPM can be the tighter limit: without request batching, 100,000 inputs at
+60 RPM take at least 1,667 minutes (27.8 hours), exceeding the hook's polling
+budget. Search controls embedding batching and internal throttling retries;
+do not assume one request per ticket or a particular batch size.
+
+Before event fan-out, inspect the model/SKU capacity factors and the deployed
+`bootcamp-embedding` [rateLimits](https://learn.microsoft.com/en-us/rest/api/aiservices/accountmanagement/deployments/get?view=rest-aiservices-accountmanagement-2024-10-01),
+or its `x-ratelimit-limit-tokens` / `x-ratelimit-limit-requests` response
+headers, in the intended subscription. Recompute the bound as estimated tokens
+divided by actual TPM and account for observed requests per input and RPM.
+Current [quota tables](https://learn.microsoft.com/en-us/azure/foundry/openai/quotas-limits)
+describe subscription/offer limits, not guaranteed per-deployment throughput.
+If the test run is too slow or heavily throttled, **raise embedding capacity
+and obtain quota before the event**: at the same assumed mapping, capacity 100
+would give a 14-minute token-only floor, not a 14-minute end-to-end promise.
+Do not silently change the declared models/capacity or use destructive region
+fallback to solve rate limits. Neither the capacity mapping, actual runtime
+nor billed cost has been measured against Azure here.
 
 `ProjectManagedIdentity` is accepted by the Foundry resource provider and SDK
 but is not yet in the published `2025-06-01` Bicep types, so the template
@@ -256,7 +360,8 @@ deployment artifact without deploying it. They
 exercise region input/order, organizer gating, in-place reruns, platform scope
 and identity inputs, pre-existing RG metadata/access preservation, success-only
 credential publication, the pinned source archive, safe dataset sharding,
-indexer/query readiness, and declared keyless resources/models.
+indexer/query readiness (including missing-vector rejection, vectorizer wiring
+and vector-mapping rerun protection), and declared keyless resources/models.
 Compilation checks schema/types, not subscription
 policy, live availability, quota or runtime endpoint contents.
 
@@ -290,5 +395,9 @@ content-pack import with those acceptance checks.
   read 2026-11-25.
 - [Blob indexer CSV parsing](https://learn.microsoft.com/en-us/azure/search/search-how-to-index-azure-blob-csv),
   [managed-identity Storage access](https://learn.microsoft.com/en-us/azure/search/search-howto-managed-identities-storage)
-  and [indexer status](https://learn.microsoft.com/en-us/azure/search/search-monitor-indexers),
+  [indexer status](https://learn.microsoft.com/en-us/azure/search/search-monitor-indexers),
+  [embedding skill](https://learn.microsoft.com/en-us/azure/search/cognitive-search-skill-azure-openai-embedding),
+  [query vectorizer](https://learn.microsoft.com/en-us/azure/search/vector-search-vectorizer-azure-open-ai),
+  [vector queries](https://learn.microsoft.com/en-us/azure/search/vector-search-how-to-query)
+  and [prefiltering](https://learn.microsoft.com/en-us/azure/search/vector-search-filters),
   read 2026-11-25.

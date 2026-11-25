@@ -8,7 +8,11 @@ param(
     [Parameter(Mandatory = $true)]
     [string]$ResourceGroupName,
     [Parameter(Mandatory = $true)]
-    [string]$SearchEndpoint
+    [string]$SearchEndpoint,
+    [Parameter(Mandatory = $true)]
+    [string]$EmbeddingEndpoint,
+    [Parameter(Mandatory = $true)]
+    [string]$EmbeddingDeploymentName
 )
 
 $ErrorActionPreference = 'Stop'
@@ -191,6 +195,7 @@ $searchApiVersion = '2025-09-01'
 $indexName = 'bootcamp-baseline-v1'
 $sourceName = 'bootcamp-baseline-v1-source'
 $indexerName = 'bootcamp-baseline-v1-indexer'
+$skillsetName = 'bootcamp-baseline-v1-embeddings'
 $storageId = "/subscriptions/$SubscriptionId/resourceGroups/$ResourceGroupName/providers/Microsoft.Storage/storageAccounts/$StorageAccountName"
 $columns = @(
     'ticket_id', 'created_at', 'customer_id', 'customer_segment', 'channel', 'product_area',
@@ -210,7 +215,46 @@ $fields = @($columns | ForEach-Object {
     if ($_ -eq 'ticket_id') { $field.key = $true }
     $field
 })
-$index = @{ name = $indexName; fields = $fields }
+$fields += @{
+    name = 'ticket_vector'
+    type = 'Collection(Edm.Single)'
+    searchable = $true
+    retrievable = $true
+    dimensions = 1536
+    vectorSearchProfile = 'baseline-vector-profile'
+}
+$embeddingParameters = @{
+    resourceUri = $EmbeddingEndpoint
+    deploymentId = $EmbeddingDeploymentName
+    modelName = 'text-embedding-3-small'
+}
+$index = @{
+    name = $indexName
+    fields = $fields
+    vectorSearch = @{
+        algorithms = @(@{ name = 'baseline-hnsw'; kind = 'hnsw'; hnswParameters = @{ metric = 'cosine' } })
+        profiles = @(@{ name = 'baseline-vector-profile'; algorithm = 'baseline-hnsw'; vectorizer = 'baseline-vectorizer' })
+        vectorizers = @(@{
+            name = 'baseline-vectorizer'
+            kind = 'azureOpenAI'
+            azureOpenAIParameters = $embeddingParameters
+        })
+    }
+}
+$skillset = @{
+    name = $skillsetName
+    skills = @(@{
+        '@odata.type' = '#Microsoft.Skills.Text.AzureOpenAIEmbeddingSkill'
+        name = 'embed-ticket'
+        context = '/document'
+        resourceUri = $EmbeddingEndpoint
+        deploymentId = $EmbeddingDeploymentName
+        modelName = 'text-embedding-3-small'
+        dimensions = 1536
+        inputs = @(@{ name = 'text'; source = '/document/initial_message' })
+        outputs = @(@{ name = 'embedding'; targetName = 'ticket_vector' })
+    })
+}
 $source = @{
     name = $sourceName
     type = 'azureblob'
@@ -221,6 +265,7 @@ $indexer = @{
     name = $indexerName
     dataSourceName = $sourceName
     targetIndexName = $indexName
+    skillsetName = $skillsetName
     parameters = @{
         maxFailedItems = 0
         maxFailedItemsPerBatch = 0
@@ -231,6 +276,27 @@ $indexer = @{
         }
     }
     fieldMappings = @(@{ sourceFieldName = 'ticket_id'; targetFieldName = 'ticket_id' })
+    outputFieldMappings = @(@{ sourceFieldName = '/document/ticket_vector/*'; targetFieldName = 'ticket_vector' })
+}
+
+function Test-SearchDefinition($Actual, $Expected) {
+    if ($Expected -is [System.Collections.IDictionary]) {
+        if ($Actual -isnot [System.Collections.IDictionary]) { return $false }
+        foreach ($key in $Expected.Keys) {
+            if (-not $Actual.Contains($key) -or -not (Test-SearchDefinition $Actual[$key] $Expected[$key])) {
+                return $false
+            }
+        }
+        return $true
+    }
+    if ($Expected -is [array]) {
+        if ($Actual -isnot [array] -or $Actual.Count -ne $Expected.Count) { return $false }
+        for ($i = 0; $i -lt $Expected.Count; $i++) {
+            if (-not (Test-SearchDefinition $Actual[$i] $Expected[$i])) { return $false }
+        }
+        return $true
+    }
+    return $Actual -ceq $Expected
 }
 
 function Get-SearchResource([string]$Kind, [string]$Name) {
@@ -259,6 +325,19 @@ function Assert-SearchResource([string]$Kind, $Actual, $Expected) {
                         $compatible = $false
                     }
                 }
+            }
+            $compatible = $compatible -and (Test-SearchDefinition $Actual['vectorSearch'] $Expected.vectorSearch)
+            if ($compatible) {
+                $vectorizer = $Actual['vectorSearch']['vectorizers'][0]['azureOpenAIParameters']
+                $compatible = -not $vectorizer['apiKey'] -and -not $vectorizer['authIdentity']
+            }
+        }
+        'skillsets' {
+            $compatible = $compatible -and (Test-SearchDefinition $Actual['skills'] $Expected.skills)
+            if ($compatible) {
+                $skill = $Actual['skills'][0]
+                $compatible = -not $skill['apiKey'] -and -not $skill['authIdentity'] -and
+                    -not $Actual['cognitiveServices']
             }
         }
         'datasources' {
@@ -293,7 +372,9 @@ function Assert-SearchResource([string]$Kind, $Actual, $Expected) {
                 $mapping[0]['sourceFieldName'] -eq 'ticket_id' -and
                 $mapping[0]['targetFieldName'] -eq 'ticket_id' -and
                 $null -eq $mapping[0]['mappingFunction'] -and
-                -not $Actual['disabled'] -and -not $Actual['skillsetName']
+                -not $Actual['disabled'] -and $Actual['skillsetName'] -eq $Expected.skillsetName -and
+                (Test-SearchDefinition $Actual['outputFieldMappings'] $Expected.outputFieldMappings) -and
+                -not $Actual['outputFieldMappings'][0]['mappingFunction']
         }
     }
     if (-not $compatible) {
@@ -333,6 +414,7 @@ if (-not $indexCreated -and $null -eq (Get-SearchResource 'indexers' $indexerNam
     }
 }
 $null = Ensure-SearchResource 'datasources' $source
+$null = Ensure-SearchResource 'skillsets' $skillset
 $indexerCreated = Ensure-SearchResource 'indexers' $indexer
 $statusUri = "$SearchEndpoint/indexers('$indexerName')/search.status?api-version=$searchApiVersion"
 $runUri = "$SearchEndpoint/indexers('$indexerName')/search.run?api-version=$searchApiVersion"
@@ -345,13 +427,62 @@ $query = @{
     top = 1
 }
 $queryBody = [Text.Encoding]::UTF8.GetBytes(($query | ConvertTo-Json -Compress))
+$hybridQuery = $query.Clone()
+$hybridQuery.select = 'ticket_id,initial_message,ticket_vector'
+$hybridQuery.vectorFilterMode = 'preFilter'
+$hybridQuery.vectorQueries = @(@{
+    kind = 'text'
+    text = 'password is incorrect'
+    fields = 'ticket_vector'
+    k = 1
+    exhaustive = $true
+})
+$hybridBody = [Text.Encoding]::UTF8.GetBytes(($hybridQuery | ConvertTo-Json -Depth 10 -Compress))
+
+function Assert-BaselineVectorCoverage {
+    # Pure vector results prove coverage without downloading 153.6 million floats.
+    $probe = [double[]]::new(1536)
+    $probe[0] = 1
+    for ($first = 1; $first -le 100000; $first += 1000) {
+        $ids = @($first..($first + 999) | ForEach-Object { 'TCKT_{0:D6}' -f $_ })
+        $expected = [System.Collections.Generic.HashSet[string]]::new([string[]]$ids, [StringComparer]::Ordinal)
+        $coverageQuery = @{
+            select = 'ticket_id'
+            filter = "search.in(ticket_id, '$($ids -join ',')', ',')"
+            vectorFilterMode = 'preFilter'
+            vectorQueries = @(@{
+                kind = 'vector'
+                vector = $probe
+                fields = 'ticket_vector'
+                k = 1000
+                exhaustive = $true
+            })
+            top = 1000
+        }
+        $body = [Text.Encoding]::UTF8.GetBytes(($coverageQuery | ConvertTo-Json -Depth 10 -Compress))
+        $response = Invoke-BaselineRequest -Uri $queryUri -Method Post -ResourceUrl $searchAudience `
+            -Body $body -ContentType 'application/json'
+        $page = $response.Content | ConvertFrom-Json -AsHashtable
+        foreach ($document in @($page['value'])) {
+            if ($document -isnot [System.Collections.IDictionary] -or
+                -not $expected.Remove([string]$document['ticket_id'])) {
+                throw 'Baseline vector coverage returned an unexpected or duplicate ticket ID.'
+            }
+        }
+        if ($expected.Count -gt 0) {
+            $missing = @($expected | Sort-Object)[0]
+            throw "Baseline vectors are missing for $($expected.Count) tickets in the batch starting at $($ids[0]), including $missing. No indexer reset was attempted."
+        }
+    }
+}
+
 $manualRunRequested = $false
 $lastFailure = $null
 $failureRetries = 0
 $lastStatus = 'not started'
 $lastCount = 0
 $lastDiagnostic = 'No indexer result has been reported.'
-for ($poll = 0; $poll -lt 180; $poll++) {
+for ($poll = 0; $poll -lt 4320; $poll++) {
     $statusResponse = Invoke-BaselineRequest -Uri $statusUri -Method Get -ResourceUrl $searchAudience
     $status = $statusResponse.Content | ConvertFrom-Json -AsHashtable
     if ($status.status -eq 'error') {
@@ -375,6 +506,15 @@ for ($poll = 0; $poll -lt 180; $poll++) {
                 $found = $queryResponse.Content | ConvertFrom-Json -AsHashtable
                 if (@($found.value).Count -eq 1 -and $found.value[0].ticket_id -eq 'TCKT_000001' -and
                     $found.value[0].initial_message -like '*password is incorrect*') {
+                    Assert-BaselineVectorCoverage
+                    $hybridResponse = Invoke-BaselineRequest -Uri $queryUri -Method Post -ResourceUrl $searchAudience `
+                        -Body $hybridBody -ContentType 'application/json'
+                    $hybrid = $hybridResponse.Content | ConvertFrom-Json -AsHashtable
+                    if (@($hybrid['value']).Count -ne 1 -or
+                        $hybrid['value'][0]['ticket_id'] -ne 'TCKT_000001' -or
+                        @($hybrid['value'][0]['ticket_vector']).Count -ne 1536) {
+                        throw 'Baseline hybrid query did not return the known ticket with its 1536-dimensional vector.'
+                    }
                     return $indexName
                 }
             } elseif (-not $indexerCreated -and -not $manualRunRequested) {
@@ -396,4 +536,4 @@ for ($poll = 0; $poll -lt 180; $poll++) {
     }
     Start-Sleep -Seconds 20
 }
-throw "Baseline indexer did not produce the complete queryable dataset within one hour (status: $lastStatus; documents: $lastCount). Last result: $lastDiagnostic"
+throw "Baseline indexer did not produce the complete queryable dataset within 24 hours of polling (status: $lastStatus; documents: $lastCount). Last result: $lastDiagnostic"
