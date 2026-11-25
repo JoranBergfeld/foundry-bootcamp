@@ -78,8 +78,7 @@ $studentZip | ForEach-Object { ($_ -split '/')[0] } | Sort-Object -Unique |
     Where-Object { $_ -notin $participantEntries } |
     ForEach-Object { "Student ZIP includes repository-only entry '$_'" }
 
-if ('walkthrough/.gitkeep' -notin $files) { 'Missing walkthrough/.gitkeep for MicroHack discovery' }
-if ($files | Where-Object { $_ -match '^walkthrough/' -and $_ -cne 'walkthrough/.gitkeep' }) {
+if ($files | Where-Object { $_ -match '^walkthrough/' }) {
     'Coach-only pages are not allowed: walkthrough/'
 }
 

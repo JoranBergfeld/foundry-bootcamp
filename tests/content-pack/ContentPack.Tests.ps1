@@ -27,7 +27,6 @@ BeforeAll {
         Write-PackFile $root 'GLOSSARY.md' '# Glossary'
         Write-PackFile $root 'docs/agents/domain.md' '# Domain'
         Write-PackFile $root 'tests/content-pack/x.ps1' '#'
-        Write-PackFile $root 'walkthrough/.gitkeep' ''
         Write-PackFile $root 'labautomation/lab-defaults.json' (@{
             contentPreparation = @{ studentZipExclusions = @('docs', 'AGENTS.md', 'GLOSSARY.md', 'tests') }
         } | ConvertTo-Json -Depth 5)
@@ -151,13 +150,6 @@ Run ``az login`` first.
         Write-PackFile $root 'walkthrough/solution-01.md' '# Solution 01'
 
         Invoke-Check $root | Should -Contain 'Coach-only pages are not allowed: walkthrough/'
-    }
-
-    It 'reports a missing discovery directory marker' {
-        $root = New-ValidPack
-        Remove-Item (Join-Path $root 'walkthrough/.gitkeep')
-
-        Invoke-Check $root | Should -Contain 'Missing walkthrough/.gitkeep for MicroHack discovery'
     }
 
     It 'reports challenge pages beyond the six labs' {
