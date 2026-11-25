@@ -5,8 +5,9 @@ by all six labs. It is not a participant setup/reset script. It retains the
 platform's five parameters: `DeploymentType`, `SubscriptionId`,
 `ResourceGroupName`, `PreferredLocation`, and `AllowedEntraUserIds`.
 There is no per-lab provisioning entry point or shared subscription-level
-Foundry account. Search, Storage, monitoring and baseline indexing are deferred
-to tickets #16/#17.
+Foundry account. Each participant environment also receives AI Search, Storage
+and Application Insights tracing (#16). Baseline dataset upload and indexing are
+deferred to ticket #17.
 
 ## Operator prerequisites
 
@@ -15,8 +16,10 @@ to tickets #16/#17.
   platform's subscription Owner permissions, including resource and role
   assignment creation. The hook verifies the context and never signs in or
   switches subscriptions.
-- Register `Microsoft.CognitiveServices` for each event subscription before
-  fan-out. Provide Az.Accounts, Az.Resources, an installed Bicep compiler and the
+- Register `Microsoft.CognitiveServices`, `Microsoft.Search`,
+  `Microsoft.Storage`, `Microsoft.OperationalInsights` and `Microsoft.Insights`
+  for each event subscription before fan-out. Check the AI Search Basic service
+  limit per subscription/region for N participants. Provide Az.Accounts, Az.Resources, an installed Bicep compiler and the
   current MicroHack helpers `Get-MhhStableHash`,
   `Invoke-MhhDeploymentWithRegionFallback`, and `Remove-MhhResourceGroup`.
   Pin/test the platform runner's helper version before the event; helpers are
@@ -73,9 +76,45 @@ authentication is disabled; public endpoints remain enabled for participant
 Entra authentication. Each supplied participant receives Azure AI User
 (`53ca6127-db72-4b80-b1b0-d745d6d5456d`) scoped to the Foundry account. Current
 Microsoft documentation displays this unchanged built-in role as **Foundry
-User**. MicroHack retains ownership of participant control-plane roles. Workload
-identity permissions for Search/Storage and their bindings belong to #16.
+User**. MicroHack retains ownership of participant control-plane roles.
 No key, password, token or connection string is retrieved or published.
+
+## Search, Storage and tracing
+
+| Resource | Choice |
+|---|---|
+| AI Search | `srch-<uniqueString>`, Basic, 1 replica/partition, semantic ranker free tier, system-assigned identity, `disableLocalAuth` (Entra only) |
+| Storage | `st<uniqueString>`, StorageV2 Standard_LRS, shared key and public blob access disabled, OAuth default, TLS 1.2 |
+| Baseline container | `baseline` (private); #17 uploads the baseline dataset here |
+| Log Analytics | `log-<uniqueString>`, PerGB2018, 30-day retention, local auth disabled |
+| Application Insights | `appi-<uniqueString>`, workspace-based, local auth disabled |
+| Project connections | `bootcamp-tracing` (AppInsights) and `bootcamp-search` (CognitiveSearch), both `ProjectManagedIdentity`, no stored credentials |
+
+Role assignments (stable `guid(scope, principal, role)` names, so reruns are
+idempotent):
+
+| Principal | Role | Scope | Why |
+|---|---|---|---|
+| Each participant | Search Service Contributor, Search Index Data Contributor | Search | Create and query lab indexes |
+| Each participant | Storage Blob Data Contributor | Storage | Upload and read lab data |
+| Foundry account MI | Search Service Contributor, Search Index Data Contributor | Search | Documented keyless auth for the Foundry AI Search tool |
+| Foundry project MI | Search Service Contributor, Search Index Data Contributor | Search | `bootcamp-search` project-identity connection |
+| Foundry project MI | Monitoring Metrics Publisher | Application Insights | Keyless trace ingestion |
+| Search MI | Storage Blob Data Reader | Storage | Indexer reads `baseline` (#17) |
+| Search MI | Cognitive Services OpenAI User | Foundry account | Integrated vectorization with `bootcamp-embedding` (#17) |
+
+**Reuse by #17:** upload to container `baseline` on `StorageAccountName` with
+the provisioner's Entra identity (grant it Storage Blob Data Contributor and
+Search roles as needed); create the blob data source with a
+`ResourceId=<storage resource ID>;` connection (no key), the indexer running as
+the Search system-assigned identity, and the embedding skill/vectorizer pointing
+at the Foundry account with no API key. Do not introduce keys or a user-assigned
+identity.
+
+`ProjectManagedIdentity` is accepted by the Foundry resource provider and SDK
+but is not yet in the published `2025-06-01` Bicep types, so the template
+suppresses BCP036 for those two connections. This has not been validated by a
+live deployment.
 
 ## Initial provisioning versus retries
 
@@ -133,7 +172,7 @@ supported way to recover an environment.
 
 ## Participant values
 
-Only after complete successful deployment, the hook emits five separate
+Only after complete successful deployment, the hook emits eight separate
 `HackboxCredential` **hashtables**, each with `name` and `value`:
 
 | Name | Value |
@@ -143,6 +182,9 @@ Only after complete successful deployment, the hook emits five separate
 | `FoundryProjectEndpoint` | Foundry API project URL, built from the account's returned endpoint |
 | `ChatDeploymentName` | `bootcamp-chat` |
 | `EmbeddingDeploymentName` | `bootcamp-embedding` |
+| `SearchEndpoint` | `https://<search>.search.windows.net` |
+| `StorageAccountName` | Participant storage account |
+| `StorageBaselineContainerName` | `baseline` |
 
 `labautomation` is not participant download material. Guides consume these
 dashboard values; they must not direct participants to run provisioning.
@@ -167,7 +209,8 @@ policy, live availability, quota or runtime endpoint contents.
 
 **Not observed:** a live MicroHack hook run, cloud deployment/ARM validation,
 initial region exhaustion, actual Entra inference/RBAC propagation, runtime
-project endpoint, participant dashboard rendering and retention of participant
+project endpoint, Search/Storage data-plane access, trace ingestion through the
+`ProjectManagedIdentity` connection, participant dashboard rendering and retention of participant
 work across a live rerun. These require explicit authorization for an
 organizer-owned disposable environment. Do not equate the local tests or a
 content-pack import with those acceptance checks.
@@ -187,3 +230,7 @@ content-pack import with those acceptance checks.
   [retirement schedule](https://learn.microsoft.com/en-us/azure/foundry/openai/concepts/model-retirement-schedule),
   [quota and limits](https://learn.microsoft.com/en-us/azure/foundry/openai/quotas-limits)
   and [Foundry User role](https://learn.microsoft.com/en-us/azure/role-based-access-control/built-in-roles/ai-machine-learning#foundry-user).
+- [Foundry AI Search tool keyless roles](https://learn.microsoft.com/en-us/azure/foundry/agents/how-to/tools/ai-search),
+  [AI Search RBAC](https://learn.microsoft.com/en-us/azure/search/search-security-rbac)
+  and [Entra trace ingestion](https://learn.microsoft.com/en-us/azure/foundry/observability/how-to/trace-ingestion-entra-authentication),
+  read 2026-11-25.

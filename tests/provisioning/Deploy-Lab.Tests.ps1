@@ -15,6 +15,24 @@ BeforeAll {
         param($PreferredLocations, $ResourceGroupName, $RgOwnerEntraObjectIds, $TemplateFile,
             $TemplateParameterObject, $DeploymentNamePrefix)
     }
+    function Get-CompiledCore {
+        $compiled = Join-Path $TestDrive "core-$([guid]::NewGuid()).json"
+        & az bicep build --file (Join-Path $PSScriptRoot '..\..\labautomation\foundry-core.bicep') --outfile $compiled --only-show-errors
+        if ($LASTEXITCODE -ne 0) { throw 'Bicep compilation failed' }
+        @{ Text = Get-Content $compiled -Raw; Arm = Get-Content $compiled -Raw | ConvertFrom-Json -AsHashtable }
+    }
+    function Get-RoleGrants($Arm) {
+        foreach ($grant in @($Arm.resources | Where-Object type -eq 'Microsoft.Authorization/roleAssignments')) {
+            $roleId = $grant.properties.roleDefinitionId
+            if ($roleId -match "^\[variables\('([^']+)'\)\]$") { $roleId = $Arm.variables[$Matches[1]] }
+            [pscustomobject]@{
+                Role = $roleId
+                Principal = $grant.properties.principalId
+                PrincipalType = $grant.properties.principalType
+                Scope = $grant.scope
+            }
+        }
+    }
 }
 
 Describe 'MicroHack Foundry provisioning hook' {
@@ -60,6 +78,9 @@ Describe 'MicroHack Foundry provisioning hook' {
                     FoundryProjectEndpoint = @{ Value = 'https://foundry.example/api/projects/bootcamp' }
                     ChatDeploymentName = @{ Value = 'bootcamp-chat' }
                     EmbeddingDeploymentName = @{ Value = 'bootcamp-embedding' }
+                    SearchEndpoint = @{ Value = 'https://srch.example.search.windows.net' }
+                    StorageAccountName = @{ Value = 'stexample' }
+                    StorageBaselineContainerName = @{ Value = 'baseline' }
                 }
             }
         }
@@ -71,6 +92,9 @@ Describe 'MicroHack Foundry provisioning hook' {
                     FoundryProjectEndpoint = 'https://foundry.example/api/projects/bootcamp'
                     ChatDeploymentName = 'bootcamp-chat'
                     EmbeddingDeploymentName = 'bootcamp-embedding'
+                    SearchEndpoint = 'https://srch.example.search.windows.net'
+                    StorageAccountName = 'stexample'
+                    StorageBaselineContainerName = 'baseline'
                 }
             }
         }
@@ -93,7 +117,7 @@ Describe 'MicroHack Foundry provisioning hook' {
             $RgOwnerEntraObjectIds[0] -eq '00000000-0000-0000-0000-000000000002' -and
             $TemplateParameterObject.participantObjectIds[0] -eq '00000000-0000-0000-0000-000000000002'
         }
-        $credentials.Count | Should -Be 5
+        $credentials.Count | Should -Be 8
         $values = @{}
         foreach ($credential in $credentials) {
             $credential | Should -BeOfType [hashtable]
@@ -104,6 +128,9 @@ Describe 'MicroHack Foundry provisioning hook' {
         $values.FoundryProjectEndpoint | Should -Be 'https://foundry.example/api/projects/bootcamp'
         $values.ChatDeploymentName | Should -Be 'bootcamp-chat'
         $values.EmbeddingDeploymentName | Should -Be 'bootcamp-embedding'
+        $values.SearchEndpoint | Should -Be 'https://srch.example.search.windows.net'
+        $values.StorageAccountName | Should -Be 'stexample'
+        $values.StorageBaselineContainerName | Should -Be 'baseline'
     }
 
     It 'never calls destructive fallback on a populated RG even with organizer opt-in' {
@@ -299,6 +326,26 @@ Describe 'MicroHack Foundry provisioning hook' {
         $published.Count | Should -Be 0
     }
 
+    It 'publishes nothing if the deployment omits the Search or Storage values' {
+        Mock Invoke-MhhDeploymentWithRegionFallback {
+            @{
+                Success = $true
+                LocationUsed = 'region-first'
+                Outputs = @{
+                    FoundryProjectEndpoint = 'https://foundry.example/api/projects/bootcamp'
+                    ChatDeploymentName = 'bootcamp-chat'
+                    EmbeddingDeploymentName = 'bootcamp-embedding'
+                    StorageAccountName = 'stexample'
+                    StorageBaselineContainerName = 'baseline'
+                }
+            }
+        }
+        $published = [System.Collections.Generic.List[object]]::new()
+        { & $script:Hook @script:Inputs | ForEach-Object { $published.Add($_) } } |
+            Should -Throw "*missing required output 'SearchEndpoint'*"
+        $published.Count | Should -Be 0
+    }
+
     It 'submits a compilable keyless Foundry account and project with participant workload access' {
         $template = Join-Path $PSScriptRoot '..\..\labautomation\foundry-core.bicep'
         $template | Should -Exist
@@ -315,20 +362,99 @@ Describe 'MicroHack Foundry provisioning hook' {
         $project = @($arm.resources | Where-Object type -eq 'Microsoft.CognitiveServices/accounts/projects')
         $project.Count | Should -Be 1
         $project[0].identity.type | Should -Be 'SystemAssigned'
-        $grant = @($arm.resources | Where-Object type -eq 'Microsoft.Authorization/roleAssignments')
+        $grant = @(Get-RoleGrants $arm | Where-Object Role -Match '53ca6127-db72-4b80-b1b0-d745d6d5456d')
         $grant.Count | Should -Be 1
-        $roleId = $grant[0].properties.roleDefinitionId
-        if ($roleId -match "^\[variables\('([^']+)'\)\]$") {
-            $roleId = $arm.variables[$Matches[1]]
-        }
-        $roleId | Should -Match '53ca6127-db72-4b80-b1b0-d745d6d5456d'
-        $grant[0].properties.principalId | Should -Match 'participantObjectIds'
-        $grant[0].properties.principalType | Should -Be 'User'
-        $grant[0].scope | Should -Match 'Microsoft.CognitiveServices/accounts'
+        $grant[0].Principal | Should -Match 'participantObjectIds'
+        $grant[0].PrincipalType | Should -Be 'User'
+        $grant[0].Scope | Should -Match 'Microsoft.CognitiveServices/accounts'
         $arm.outputs.FoundryProjectEndpoint.type | Should -Be 'string'
         $arm.parameters.location.defaultValue | Should -Be '[resourceGroup().location]'
-        $arm.resources.type | Should -Not -Contain 'Microsoft.Search/searchServices'
-        $arm.resources.type | Should -Not -Contain 'Microsoft.Storage/storageAccounts'
+    }
+
+    It 'adds keyless AI Search and Storage with a reusable baseline container' {
+        $core = Get-CompiledCore
+        $arm = $core.Arm
+        $search = @($arm.resources | Where-Object type -eq 'Microsoft.Search/searchServices')
+        $search.Count | Should -Be 1
+        $search[0].properties.disableLocalAuth | Should -BeTrue
+        $search[0].properties.Keys | Should -Not -Contain 'authOptions'
+        $search[0].identity.type | Should -Be 'SystemAssigned'
+        $storage = @($arm.resources | Where-Object type -eq 'Microsoft.Storage/storageAccounts')
+        $storage.Count | Should -Be 1
+        $storage[0].properties.allowSharedKeyAccess | Should -BeFalse
+        $storage[0].properties.allowBlobPublicAccess | Should -BeFalse
+        $storage[0].properties.defaultToOAuthAuthentication | Should -BeTrue
+        $container = @($arm.resources | Where-Object type -eq 'Microsoft.Storage/storageAccounts/blobServices/containers')
+        $container.Count | Should -Be 1
+        $container[0].properties.publicAccess | Should -Be 'None'
+        $arm.outputs.StorageBaselineContainerName.value | Should -Be 'baseline'
+        $container[0].name | Should -Match 'baseline'
+        $arm.outputs.SearchEndpoint.type | Should -Be 'string'
+        $arm.outputs.StorageAccountName.type | Should -Be 'string'
+        $core.Text | Should -Not -Match 'listKeys|listAdminKeys|listQueryKeys|ConnectionString|InstrumentationKey'
+    }
+
+    It 'connects workspace-based Application Insights to the Foundry project for keyless tracing' {
+        $arm = (Get-CompiledCore).Arm
+        $workspace = @($arm.resources | Where-Object type -eq 'Microsoft.OperationalInsights/workspaces')
+        $workspace.Count | Should -Be 1
+        $workspace[0].properties.features.disableLocalAuth | Should -BeTrue
+        $insights = @($arm.resources | Where-Object type -eq 'Microsoft.Insights/components')
+        $insights.Count | Should -Be 1
+        $insights[0].properties.WorkspaceResourceId | Should -Match 'Microsoft.OperationalInsights/workspaces'
+        $insights[0].properties.DisableLocalAuth | Should -BeTrue
+        $connection = @($arm.resources | Where-Object type -eq 'Microsoft.CognitiveServices/accounts/projects/connections' |
+            Where-Object { $_.properties.category -eq 'AppInsights' })
+        $connection.Count | Should -Be 1
+        $connection[0].properties.authType | Should -Be 'ProjectManagedIdentity'
+        $connection[0].properties.Keys | Should -Not -Contain 'credentials'
+        $connection[0].properties.target | Should -Match 'Microsoft.Insights/components'
+        $publisher = @(Get-RoleGrants $arm | Where-Object Role -Match '3913510d-42f4-4e42-8a64-420c390055eb')
+        $publisher.Count | Should -Be 1
+        $publisher[0].Principal | Should -Match 'accounts/projects'
+        $publisher[0].PrincipalType | Should -Be 'ServicePrincipal'
+        $publisher[0].Scope | Should -Match 'Microsoft.Insights/components'
+    }
+
+    It 'grants participants the agreed Search and Storage data-plane roles' {
+        $grants = @(Get-RoleGrants (Get-CompiledCore).Arm | Where-Object PrincipalType -eq 'User')
+        foreach ($expected in @(
+            @{ Role = '7ca78c08-252a-4471-8644-bb5ff32d4ba0'; Scope = 'Microsoft.Search/searchServices' }
+            @{ Role = '8ebe5a00-799e-43f5-93ac-243d3dce84a7'; Scope = 'Microsoft.Search/searchServices' }
+            @{ Role = 'ba92f5b4-2d11-453d-a403-e96b0029c9fe'; Scope = 'Microsoft.Storage/storageAccounts' }
+        )) {
+            $grant = @($grants | Where-Object Role -Match $expected.Role)
+            $grant.Count | Should -Be 1 -Because "participant role $($expected.Role)"
+            $grant[0].Principal | Should -Match 'participantObjectIds'
+            $grant[0].Scope | Should -Match $expected.Scope
+        }
+        $grants.Count | Should -Be 4
+    }
+
+    It 'binds workload managed identities to scoped Search, Foundry and Storage roles' {
+        $arm = (Get-CompiledCore).Arm
+        $grants = @(Get-RoleGrants $arm | Where-Object PrincipalType -eq 'ServicePrincipal')
+        $expected = @(
+            # Foundry account and project identities call the Search index from agent tools.
+            @{ Role = '7ca78c08-252a-4471-8644-bb5ff32d4ba0'; Principal = "accounts', variables\('accountName'\)\), '[^']+', 'full'\)\.identity"; Scope = 'Microsoft.Search/searchServices' }
+            @{ Role = '8ebe5a00-799e-43f5-93ac-243d3dce84a7'; Principal = "accounts', variables\('accountName'\)\), '[^']+', 'full'\)\.identity"; Scope = 'Microsoft.Search/searchServices' }
+            @{ Role = '7ca78c08-252a-4471-8644-bb5ff32d4ba0'; Principal = 'accounts/projects'; Scope = 'Microsoft.Search/searchServices' }
+            @{ Role = '8ebe5a00-799e-43f5-93ac-243d3dce84a7'; Principal = 'accounts/projects'; Scope = 'Microsoft.Search/searchServices' }
+            # Search reads the baseline container and calls the embedding deployment during indexing.
+            @{ Role = '2a2b9908-6ea1-4ae2-8e65-a410df84e7d1'; Principal = 'Microsoft.Search/searchServices'; Scope = 'Microsoft.Storage/storageAccounts' }
+            @{ Role = '5e0bd9bd-7b93-4f28-af87-19fc36ad61bd'; Principal = 'Microsoft.Search/searchServices'; Scope = 'Microsoft.CognitiveServices/accounts' }
+            @{ Role = '3913510d-42f4-4e42-8a64-420c390055eb'; Principal = 'accounts/projects'; Scope = 'Microsoft.Insights/components' }
+        )
+        foreach ($binding in $expected) {
+            @($grants | Where-Object { $_.Role -match $binding.Role -and $_.Principal -match $binding.Principal -and
+                $_.Scope -match $binding.Scope }).Count | Should -Be 1 -Because "$($binding.Principal) needs $($binding.Role)"
+        }
+        $grants.Count | Should -Be $expected.Count
+        $search = @($arm.resources | Where-Object type -eq 'Microsoft.CognitiveServices/accounts/projects/connections' |
+            Where-Object { $_.properties.category -eq 'CognitiveSearch' })
+        $search.Count | Should -Be 1
+        $search[0].properties.authType | Should -Be 'ProjectManagedIdentity'
+        $search[0].properties.Keys | Should -Not -Contain 'credentials'
     }
 
     It 'deploys the declared GA chat and embedding models with explicit versions and capacity' {

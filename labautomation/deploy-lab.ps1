@@ -99,7 +99,11 @@ if ($env:BOOTCAMP_ORGANIZER_INITIAL_PROVISIONING -ceq 'true' -and $resources.Cou
     $result = @{ LocationUsed = $group.Location; Outputs = $outputs }
 }
 
-foreach ($key in @('FoundryProjectEndpoint', 'ChatDeploymentName', 'EmbeddingDeploymentName')) {
+$requiredOutputs = @(
+    'FoundryProjectEndpoint', 'ChatDeploymentName', 'EmbeddingDeploymentName',
+    'SearchEndpoint', 'StorageAccountName', 'StorageBaselineContainerName'
+)
+foreach ($key in $requiredOutputs) {
     if (-not $result.Outputs.ContainsKey($key) -or [string]::IsNullOrWhiteSpace($result.Outputs[$key])) {
         throw "Foundry core deployment is missing required output '$key'. No credentials were published."
     }
@@ -114,6 +118,9 @@ $values = [ordered]@{
     FoundryProjectEndpoint = $result.Outputs.FoundryProjectEndpoint
     ChatDeploymentName = $result.Outputs.ChatDeploymentName
     EmbeddingDeploymentName = $result.Outputs.EmbeddingDeploymentName
+    SearchEndpoint = $result.Outputs.SearchEndpoint
+    StorageAccountName = $result.Outputs.StorageAccountName
+    StorageBaselineContainerName = $result.Outputs.StorageBaselineContainerName
 }
 foreach ($name in $values.Keys) {
     @{ HackboxCredential = @{ name = $name; value = $values[$name] } }
