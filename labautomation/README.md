@@ -108,7 +108,6 @@ idempotent):
 | Foundry project MI | Search Service Contributor, Search Index Data Contributor | Search | `bootcamp-search` project-identity connection |
 | Foundry project MI | Monitoring Metrics Publisher | Application Insights | Keyless trace ingestion |
 | Search MI | Storage Blob Data Reader | Storage | Indexer reads `baseline` (#17) |
-| Search MI | Cognitive Services OpenAI User | Foundry account | Available for keyless integrated vectorization in labs |
 | Provisioner | Storage Blob Data Contributor | Storage | Upload and verify the baseline |
 | Provisioner | Search Service Contributor, Search Index Data Reader | Search | Create the indexer and verify queries |
 
@@ -141,10 +140,11 @@ as strings, with `ticket_id` as the stable document key. The data source
 contains only `ResourceId=<storage resource ID>;` in the Search API's
 `credentials.connectionString` property; no secret is present. With no
 user-assigned identity specified, the indexer reads the container as the Search
-system-assigned identity. This baseline does **not** precompute embeddings:
-the existing `bootcamp-embedding` deployment and the Search identity's Foundry
-role remain available for lab-specific vectorization. Any later embedding
-skill or vectorizer must likewise use managed identity, without an API key.
+system-assigned identity. This baseline does **not** precompute embeddings and
+has no skillset or vectorizer, so the Search identity has no Foundry role. The
+`bootcamp-embedding` deployment remains available to participants. Any later
+embedding skill or vectorizer must use managed identity, without an API key, and
+needs its own organizer-reviewed role assignment.
 
 Blob uploads and Search object creation are create-only. Existing shards are
 checked against their expected size and hashes; existing Search definitions

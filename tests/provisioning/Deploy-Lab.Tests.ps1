@@ -640,9 +640,8 @@ Describe 'MicroHack Foundry provisioning hook' {
             @{ Role = '8ebe5a00-799e-43f5-93ac-243d3dce84a7'; Principal = "accounts', variables\('accountName'\)\), '[^']+', 'full'\)\.identity"; Scope = 'Microsoft.Search/searchServices' }
             @{ Role = '7ca78c08-252a-4471-8644-bb5ff32d4ba0'; Principal = 'accounts/projects'; Scope = 'Microsoft.Search/searchServices' }
             @{ Role = '8ebe5a00-799e-43f5-93ac-243d3dce84a7'; Principal = 'accounts/projects'; Scope = 'Microsoft.Search/searchServices' }
-            # Search reads the baseline container and calls the embedding deployment during indexing.
+            # Search reads the baseline container; the full-text baseline needs no Foundry access.
             @{ Role = '2a2b9908-6ea1-4ae2-8e65-a410df84e7d1'; Principal = 'Microsoft.Search/searchServices'; Scope = 'Microsoft.Storage/storageAccounts' }
-            @{ Role = '5e0bd9bd-7b93-4f28-af87-19fc36ad61bd'; Principal = 'Microsoft.Search/searchServices'; Scope = 'Microsoft.CognitiveServices/accounts' }
             @{ Role = '3913510d-42f4-4e42-8a64-420c390055eb'; Principal = 'accounts/projects'; Scope = 'Microsoft.Insights/components' }
         )
         foreach ($binding in $expected) {
@@ -650,6 +649,7 @@ Describe 'MicroHack Foundry provisioning hook' {
                 $_.Scope -match $binding.Scope }).Count | Should -Be 1 -Because "$($binding.Principal) needs $($binding.Role)"
         }
         $grants.Count | Should -Be $expected.Count
+        @(Get-RoleGrants $arm | Where-Object Role -Match '5e0bd9bd-7b93-4f28-af87-19fc36ad61bd').Count | Should -Be 0
         $search = @($arm.resources | Where-Object type -eq 'Microsoft.CognitiveServices/accounts/projects/connections' |
             Where-Object { $_.properties.category -eq 'CognitiveSearch' })
         $search.Count | Should -Be 1

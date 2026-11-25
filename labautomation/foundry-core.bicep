@@ -25,7 +25,6 @@ var searchIndexDataContributorRoleId = subscriptionResourceId('Microsoft.Authori
 var searchIndexDataReaderRoleId = subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '1407120a-92aa-4202-b7e9-c0e197c71c8f')
 var storageBlobDataContributorRoleId = subscriptionResourceId('Microsoft.Authorization/roleDefinitions', 'ba92f5b4-2d11-453d-a403-e96b0029c9fe')
 var storageBlobDataReaderRoleId = subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '2a2b9908-6ea1-4ae2-8e65-a410df84e7d1')
-var openAiUserRoleId = subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '5e0bd9bd-7b93-4f28-af87-19fc36ad61bd')
 var provisionerIsParticipant = contains(map(participantObjectIds, participantId => toLower(participantId)), toLower(provisionerObjectId))
 
 resource account 'Microsoft.CognitiveServices/accounts@2025-06-01' = {
@@ -311,22 +310,12 @@ resource projectSearchData 'Microsoft.Authorization/roleAssignments@2022-04-01' 
   }
 }
 
-// Search indexers (#17) read the baseline container and call the embedding deployment as the Search identity.
+// Search indexers (#17) read the baseline container as the Search identity.
 resource searchBlobReader 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
   name: guid(storage.id, search.id, storageBlobDataReaderRoleId)
   scope: storage
   properties: {
     roleDefinitionId: storageBlobDataReaderRoleId
-    principalId: search.identity.principalId
-    principalType: 'ServicePrincipal'
-  }
-}
-
-resource searchOpenAiUser 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
-  name: guid(account.id, search.id, openAiUserRoleId)
-  scope: account
-  properties: {
-    roleDefinitionId: openAiUserRoleId
     principalId: search.identity.principalId
     principalType: 'ServicePrincipal'
   }
@@ -349,8 +338,8 @@ resource searchConnection 'Microsoft.CognitiveServices/accounts/projects/connect
 }
 
 output FoundryProjectEndpoint string = uri(account.properties.endpoints['AI Foundry API'], 'api/projects/${project.name}')
-output ChatDeploymentName string = 'bootcamp-chat'
-output EmbeddingDeploymentName string = 'bootcamp-embedding'
+output ChatDeploymentName string = chat.name
+output EmbeddingDeploymentName string = embedding.name
 output SearchEndpoint string = 'https://${search.name}.search.windows.net'
 output StorageAccountName string = storage.name
 output StorageBaselineContainerName string = baselineContainer.name
