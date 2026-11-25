@@ -153,10 +153,17 @@ must remain compatible. Participant-added index fields and unrelated resources
 are preserved. An incompatible blob, data source, index, or indexer fails
 explicitly and is never replaced. If the indexer is missing while the index
 already contains documents, provisioning stops rather than recreating an
-indexer that could overwrite participant edits. A rerun does not reset the
-indexer; it starts an incremental run only when an existing index is incomplete,
-and publishes credentials only after a successful run, at least 100,000 indexed
-documents, and a known-ticket full-text query. Indexer errors are reported to the operator.
+indexer that could overwrite participant edits. If a rerun finds the existing
+index incomplete (fewer than 100,000 documents), it resets the baseline
+indexer's change tracking and runs it once, because unchanged shards are
+otherwise skipped. Documents are keyed by `ticket_id` and merged, so this
+cannot duplicate tickets; it restores missing baseline tickets, re-applies the
+source values of the 20 baseline columns, and leaves participant-added fields,
+documents and indexes in place. If the repaired run completes and the index is
+still incomplete, provisioning fails fast with the observed count. A complete
+index is never reset. Credentials are published only after a successful run,
+at least 100,000 indexed documents, and a known-ticket full-text query.
+Indexer errors are reported to the operator.
 RBAC-related HTTP failures are retried for up to approximately ten minutes per
 request; indexer polling spans approximately one hour, plus request retries.
 Do not delete or reset participant resources to recover a failure.

@@ -345,7 +345,11 @@ $query = @{
     top = 1
 }
 $queryBody = [Text.Encoding]::UTF8.GetBytes(($query | ConvertTo-Json -Compress))
-$manualRunRequested = $false
+$resetUri = "$SearchEndpoint/indexers('$indexerName')/search.reset?api-version=$searchApiVersion"
+$repairResetRequested = $false
+$repairRunStarted = $false
+$repairPriorStart = ''
+$repairIncompletePolls = 0
 $lastFailure = $null
 $failureRetries = 0
 $lastStatus = 'not started'
@@ -357,12 +361,12 @@ for ($poll = 0; $poll -lt 180; $poll++) {
     if ($status.status -eq 'error') {
         throw "Baseline indexer is in an error state: $($statusResponse.Content)"
     }
-    $last = $status.lastResult
-    if ($null -ne $last) {
-        $lastStatus = $last.status
+    $lastResult = $status.lastResult
+    if ($null -ne $lastResult) {
+        $lastStatus = $lastResult.status
         $lastDiagnostic = $statusResponse.Content
-        if ($last.status -eq 'success') {
-            if (-not $last.ContainsKey('itemsFailed') -or $last.itemsFailed -ne 0) {
+        if ($lastResult.status -eq 'success') {
+            if (-not $lastResult.ContainsKey('itemsFailed') -or $lastResult.itemsFailed -ne 0) {
                 throw "Baseline indexer completed with failures: $($statusResponse.Content)"
             }
             $countResponse = Invoke-BaselineRequest -Uri $countUri -Method Get -ResourceUrl $searchAudience
@@ -377,12 +381,27 @@ for ($poll = 0; $poll -lt 180; $poll++) {
                     $found.value[0].initial_message -like '*password is incorrect*') {
                     return $indexName
                 }
-            } elseif (-not $indexerCreated -and -not $manualRunRequested) {
-                $null = Invoke-BaselineRequest -Uri $runUri -Method Post -ResourceUrl $searchAudience -AcceptStatus 409
-                $manualRunRequested = $true
+            } elseif (-not $indexerCreated) {
+                # Blob change tracking skips unchanged shards, so an incomplete index needs a reset to refill.
+                # Documents are keyed by ticket_id and merged, so a full re-read cannot duplicate tickets.
+                if (-not $repairRunStarted) {
+                    if (-not $repairResetRequested) {
+                        $null = Invoke-BaselineRequest -Uri $resetUri -Method Post -ResourceUrl $searchAudience
+                        $repairResetRequested = $true
+                        $repairPriorStart = [string]$lastResult['startTime']
+                    }
+                    $runResponse = Invoke-BaselineRequest -Uri $runUri -Method Post -ResourceUrl $searchAudience -AcceptStatus 409
+                    $repairRunStarted = $runResponse.StatusCode -ne 409
+                } elseif ([string]$lastResult['startTime'] -ne $repairPriorStart) {
+                    # Allow brief document-count lag before declaring the completed repair incomplete.
+                    $repairIncompletePolls++
+                    if ($repairIncompletePolls -ge 3) {
+                        throw "Baseline index repair completed, but '$indexName' contains $lastCount of 100000 documents. No credentials were published; an organizer must investigate the index and the dataset-v1 shards."
+                    }
+                }
             }
-        } elseif ($last.status -eq 'transientFailure') {
-            $fingerprint = "$($last['startTime'])|$($last['errorMessage'])"
+        } elseif ($lastResult.status -eq 'transientFailure') {
+            $fingerprint = "$($lastResult['startTime'])|$($lastResult['errorMessage'])"
             if ($fingerprint -ne $lastFailure) {
                 if ($failureRetries -ge 6) {
                     throw "Baseline indexer repeatedly failed: $($statusResponse.Content)"

@@ -534,6 +534,42 @@ Describe 'MicroHack Foundry provisioning hook' {
         }).Count | Should -Be 0
     }
 
+    It 'repairs an incomplete baseline index on rerun without replacing Search objects or participant fields' {
+        & $script:Hook @script:Inputs | Out-Null
+        $env:BOOTCAMP_ORGANIZER_INITIAL_PROVISIONING = $null
+        Mock Get-AzResource { @{ ResourceType = 'Microsoft.Search/searchServices' } }
+        $state = $global:ProvisioningTestDataPlane
+        $state.IndexedRows = 40000
+        $state.Search.indexes['bootcamp-baseline-v1'].fields += @{
+            name = 'participant_notes'; type = 'Edm.String'; searchable = $true; retrievable = $true
+        }
+        $before = $state.Requests.Count
+        $credentials = @(& $script:Hook @script:Inputs)
+        ($credentials | Where-Object { $_.HackboxCredential.name -eq 'BaselineIndexName' }).HackboxCredential.value |
+            Should -Be 'bootcamp-baseline-v1'
+        $state.IndexedRows | Should -Be 100000
+        $rerun = @($state.Requests | Select-Object -Skip $before)
+        $repair = @($rerun | Where-Object { $_.Uri -match '/search\.(reset|run)\?' } | ForEach-Object { $_.Uri -replace '.*/search\.(\w+)\?.*', '$1' })
+        ($repair -join ',') | Should -Be 'reset,run'
+        @($rerun | Where-Object { $_.Method -in @('Put', 'Delete') }).Count | Should -Be 0
+        @($state.Search.indexes['bootcamp-baseline-v1'].fields | Where-Object name -eq 'participant_notes').Count |
+            Should -Be 1
+    }
+
+    It 'fails fast with a clear message when a repaired baseline index is still incomplete' {
+        & $script:Hook @script:Inputs | Out-Null
+        $state = $global:ProvisioningTestDataPlane
+        $state.IndexedRows = 40000
+        $state.RepairRows = 90000
+        $before = $state.Requests.Count
+        $published = [System.Collections.Generic.List[object]]::new()
+        { & $script:Hook @script:Inputs | ForEach-Object { $published.Add($_) } } |
+            Should -Throw '*repair*90000 of 100000*'
+        $published.Count | Should -Be 0
+        @($state.Requests | Select-Object -Skip $before | Where-Object { $_.Uri -match '/search\.status\?' }).Count |
+            Should -BeLessThan 10
+    }
+
     It 'rejects an incompatible existing <Resource> without replacing it' -ForEach @(
         @{ Resource = 'blob'; Message = '*different content*not overwritten*' }
         @{ Resource = 'data source'; Message = '*datasources*incompatible*not overwritten*' }

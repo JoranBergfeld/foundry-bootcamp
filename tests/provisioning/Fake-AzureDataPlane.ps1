@@ -5,6 +5,8 @@ function New-FakeAzureDataPlane {
         Requests = [System.Collections.Generic.List[object]]::new()
         IndexerResult = @{ status = 'success'; itemsFailed = 0; errors = @(); warnings = @() }
         RecoveryResult = $null
+        ResetRequested = $false
+        RepairRows = $null
         IndexedRows = 0
     }
 }
@@ -83,10 +85,25 @@ function Invoke-FakeAzureDataPlane {
             $status = @{ status = 'running'; lastResult = $State.IndexerResult }
             return [pscustomobject]@{ StatusCode = 200; Content = ($status | ConvertTo-Json -Depth 20 -Compress); Headers = @{} }
         }
+        if ($action -eq 'search.reset' -and $methodName -eq 'Post') {
+            $State.ResetRequested = $true
+            return [pscustomobject]@{ StatusCode = 204; Content = ''; Headers = @{} }
+        }
         if ($action -eq 'search.run' -and $methodName -eq 'Post') {
             if ($null -ne $State.RecoveryResult) {
                 $State.IndexerResult = $State.RecoveryResult
                 $State.RecoveryResult = $null
+            }
+            # Blob change tracking: unchanged shards are reprocessed only after a reset.
+            if ($State.ResetRequested) {
+                $State.ResetRequested = $false
+                $State.IndexedRows = if ($null -ne $State.RepairRows) { $State.RepairRows } else {
+                    ($State.Blobs.Values | Measure-Object -Property Rows -Sum).Sum
+                }
+                $State.IndexerResult = @{
+                    status = 'success'; itemsFailed = 0; errors = @(); warnings = @()
+                    startTime = "repair-$($State.Requests.Count)"
+                }
             }
             return [pscustomobject]@{ StatusCode = 202; Content = ''; Headers = @{} }
         }
