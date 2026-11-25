@@ -1,5 +1,5 @@
 # Structural check for the six-lab MicroHack content pack.
-# Scope: package structure only (labs, order, guide sections, Student ZIP contents).
+# Scope: package structure only (labs, order, guide sections, solution pointer pages, Student ZIP contents).
 # It does not run lab code or validate provisioning or deployed resources.
 param([Parameter(Mandatory)][string]$Root)
 
@@ -56,6 +56,19 @@ foreach ($lab in $labs) {
         if (-not $text.Contains("]($guideLink)")) { "${label}: $challenge must link to $guideLink" }
     } else { "${label}: missing $challenge" }
 
+    # MicroHack discovery requires walkthrough/solution-NN.md; keep them as pointers to the shared lab guide.
+    $solution = "walkthrough/solution-$($lab.N).md"
+    $solutionPath = Join-Path $Root $solution
+    if (Test-Path -LiteralPath $solutionPath) {
+        $solutionTitle = "# Solution $($lab.N): $($lab.Name)"
+        $solutionLink = "../labs/$($lab.Dir)/README.md"
+        $lines = @(Get-Content -LiteralPath $solutionPath | ForEach-Object { $_.Trim() } | Where-Object { $_ })
+        $linkCount = [regex]::Matches(($lines -join "`n"), '\]\(').Count
+        if ($lines.Count -ne 2 -or $lines[0] -cne $solutionTitle -or -not $lines[1].Contains("]($solutionLink)") -or $linkCount -ne 1) {
+            "${label}: $solution must contain only '$solutionTitle' and one line linking to $solutionLink"
+        }
+    } else { "${label}: missing $solution" }
+
     $guide = "labs/$($lab.Dir)/README.md"
     $guidePath = Join-Path $Root $guide
     if (-not (Test-Path -LiteralPath $guidePath)) { "${label}: missing $guide"; continue }
@@ -78,9 +91,9 @@ $studentZip | ForEach-Object { ($_ -split '/')[0] } | Sort-Object -Unique |
     Where-Object { $_ -notin $participantEntries } |
     ForEach-Object { "Student ZIP includes repository-only entry '$_'" }
 
-if ($files | Where-Object { $_ -match '^walkthrough/' }) {
-    'Coach-only pages are not allowed: walkthrough/'
-}
+$expectedSolutions = $labs | ForEach-Object { "walkthrough/solution-$($_.N).md" }
+$files | Where-Object { $_ -match '^walkthrough/' -and $_ -notin $expectedSolutions } |
+    ForEach-Object { "Unexpected walkthrough file: $_" }
 
 $expectedChallenges = $labs | ForEach-Object { "challenges/challenge-$($_.N).md" }
 $files | Where-Object { $_ -match '^challenges/[^/]+\.md$' -and $_ -notin $expectedChallenges } |

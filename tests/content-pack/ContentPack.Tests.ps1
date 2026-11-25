@@ -32,6 +32,7 @@ BeforeAll {
         } | ConvertTo-Json -Depth 5)
         foreach ($lab in $script:Labs) {
             Write-PackFile $root "challenges/challenge-$($lab.N).md" "# Challenge $($lab.N): $($lab.Name)`n`n[Lab guide](../labs/$($lab.Dir)/README.md)"
+            Write-PackFile $root "walkthrough/solution-$($lab.N).md" "# Solution $($lab.N): $($lab.Name)`n`nFollow the [lab guide](../labs/$($lab.Dir)/README.md)."
             Write-PackFile $root "labs/$($lab.Dir)/README.md" @"
 # Lab $($lab.N): $($lab.Name)
 
@@ -145,11 +146,32 @@ Run ``az login`` first.
         Invoke-Check $root | Should -Contain 'Lab 02 (Build it (advanced, with advanced RAG)): Student ZIP is missing labs/02-build-advanced/README.md'
     }
 
-    It 'reports coach-only pages' {
+    It 'reports a missing solution pointer page' {
         $root = New-ValidPack
-        Write-PackFile $root 'walkthrough/solution-01.md' '# Solution 01'
+        Remove-Item (Join-Path $root 'walkthrough/solution-04.md')
 
-        Invoke-Check $root | Should -Contain 'Coach-only pages are not allowed: walkthrough/'
+        Invoke-Check $root | Should -Contain 'Lab 04 (Deploy it): missing walkthrough/solution-04.md'
+    }
+
+    It 'reports a solution page with coach-only content beyond the pointer' {
+        $root = New-ValidPack
+        Add-Content (Join-Path $root 'walkthrough/solution-02.md') "`n## Answer`n`nUse index settings X."
+
+        Invoke-Check $root | Should -Contain "Lab 02 (Build it (advanced, with advanced RAG)): walkthrough/solution-02.md must contain only '# Solution 02: Build it (advanced, with advanced RAG)' and one line linking to ../labs/02-build-advanced/README.md"
+    }
+
+    It 'reports a solution page that points to another lab' {
+        $root = New-ValidPack
+        Write-PackFile $root 'walkthrough/solution-05.md' "# Solution 05: Integrate it`n`nFollow the [lab guide](../labs/04-deploy/README.md)."
+
+        Invoke-Check $root | Should -Contain "Lab 05 (Integrate it): walkthrough/solution-05.md must contain only '# Solution 05: Integrate it' and one line linking to ../labs/05-integrate/README.md"
+    }
+
+    It 'reports walkthrough files beyond the six pointer pages' {
+        $root = New-ValidPack
+        Write-PackFile $root 'walkthrough/solutions/01-build-basic/answer.py' 'print(1)'
+
+        Invoke-Check $root | Should -Contain 'Unexpected walkthrough file: walkthrough/solutions/01-build-basic/answer.py'
     }
 
     It 'reports challenge pages beyond the six labs' {
