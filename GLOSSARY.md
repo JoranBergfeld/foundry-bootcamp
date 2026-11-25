@@ -30,4 +30,4 @@ _Avoid_: Provisioning interface (when implying a contract beyond the MicroHack p
 Anything a lab requires before its first participant action, whether from the participant environment or the attendee's workstation. Each lab states its own; an unstated prerequisite is an authoring fault in that lab.
 
 **Shared baseline dataset**:
-The common dataset made available across all six labs, without requiring any lab to be completed first.
+The common dataset available and searchable at the start of all six labs, without requiring any lab to be completed first.
