@@ -18,9 +18,9 @@ provisioning. Verify those separately in MicroHack and in lab-specific tests.
 
 MicroHack only discovers the pack when `walkthrough/solution-01.md` to
 `solution-06.md` exist: a scan without them reports 0 valid hacks. The pack has
-no coach-only material, so each page holds only its title (`# Solution NN: <lab>`)
-and one line linking to the matching `labs/<lab>/README.md`. The check rejects
-any other content in these pages and any other file under `walkthrough/`.
+no coach-only material, so each page holds exactly two lines: its title
+(`# Solution NN: <lab>`) and `Follow the participant [lab guide](../labs/<lab>/README.md).`
+The check rejects any other text in these pages and any other file under `walkthrough/`.
 
 Known limitation: once the pages exist, MicroHack also renders a Preview
 Solutions view and generates `download-Coach.zip`. The pack does not configure

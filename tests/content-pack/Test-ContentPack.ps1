@@ -61,11 +61,10 @@ foreach ($lab in $labs) {
     $solutionPath = Join-Path $Root $solution
     if (Test-Path -LiteralPath $solutionPath) {
         $solutionTitle = "# Solution $($lab.N): $($lab.Name)"
-        $solutionLink = "../labs/$($lab.Dir)/README.md"
+        $solutionPointer = "Follow the participant [lab guide](../labs/$($lab.Dir)/README.md)."
         $lines = @(Get-Content -LiteralPath $solutionPath | ForEach-Object { $_.Trim() } | Where-Object { $_ })
-        $linkCount = [regex]::Matches(($lines -join "`n"), '\]\(').Count
-        if ($lines.Count -ne 2 -or $lines[0] -cne $solutionTitle -or -not $lines[1].Contains("]($solutionLink)") -or $linkCount -ne 1) {
-            "${label}: $solution must contain only '$solutionTitle' and one line linking to $solutionLink"
+        if ($lines.Count -ne 2 -or $lines[0] -cne $solutionTitle -or $lines[1] -cne $solutionPointer) {
+            "${label}: $solution must contain only '$solutionTitle' and '$solutionPointer'"
         }
     } else { "${label}: missing $solution" }
 

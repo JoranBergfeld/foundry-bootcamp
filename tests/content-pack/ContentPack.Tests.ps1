@@ -32,7 +32,7 @@ BeforeAll {
         } | ConvertTo-Json -Depth 5)
         foreach ($lab in $script:Labs) {
             Write-PackFile $root "challenges/challenge-$($lab.N).md" "# Challenge $($lab.N): $($lab.Name)`n`n[Lab guide](../labs/$($lab.Dir)/README.md)"
-            Write-PackFile $root "walkthrough/solution-$($lab.N).md" "# Solution $($lab.N): $($lab.Name)`n`nFollow the [lab guide](../labs/$($lab.Dir)/README.md)."
+            Write-PackFile $root "walkthrough/solution-$($lab.N).md" "# Solution $($lab.N): $($lab.Name)`n`nFollow the participant [lab guide](../labs/$($lab.Dir)/README.md)."
             Write-PackFile $root "labs/$($lab.Dir)/README.md" @"
 # Lab $($lab.N): $($lab.Name)
 
@@ -157,14 +157,21 @@ Run ``az login`` first.
         $root = New-ValidPack
         Add-Content (Join-Path $root 'walkthrough/solution-02.md') "`n## Answer`n`nUse index settings X."
 
-        Invoke-Check $root | Should -Contain "Lab 02 (Build it (advanced, with advanced RAG)): walkthrough/solution-02.md must contain only '# Solution 02: Build it (advanced, with advanced RAG)' and one line linking to ../labs/02-build-advanced/README.md"
+        Invoke-Check $root | Should -Contain "Lab 02 (Build it (advanced, with advanced RAG)): walkthrough/solution-02.md must contain only '# Solution 02: Build it (advanced, with advanced RAG)' and 'Follow the participant [lab guide](../labs/02-build-advanced/README.md).'"
+    }
+
+    It 'reports a solution page with coach-only prose on the link line' {
+        $root = New-ValidPack
+        Write-PackFile $root 'walkthrough/solution-03.md' "# Solution 03: Evaluate it`n`nAnswer: set the threshold to 0.8, then follow the participant [lab guide](../labs/03-evaluate/README.md)."
+
+        Invoke-Check $root | Should -Contain "Lab 03 (Evaluate it): walkthrough/solution-03.md must contain only '# Solution 03: Evaluate it' and 'Follow the participant [lab guide](../labs/03-evaluate/README.md).'"
     }
 
     It 'reports a solution page that points to another lab' {
         $root = New-ValidPack
         Write-PackFile $root 'walkthrough/solution-05.md' "# Solution 05: Integrate it`n`nFollow the [lab guide](../labs/04-deploy/README.md)."
 
-        Invoke-Check $root | Should -Contain "Lab 05 (Integrate it): walkthrough/solution-05.md must contain only '# Solution 05: Integrate it' and one line linking to ../labs/05-integrate/README.md"
+        Invoke-Check $root | Should -Contain "Lab 05 (Integrate it): walkthrough/solution-05.md must contain only '# Solution 05: Integrate it' and 'Follow the participant [lab guide](../labs/05-integrate/README.md).'"
     }
 
     It 'reports walkthrough files beyond the six pointer pages' {
