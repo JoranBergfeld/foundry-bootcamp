@@ -1,0 +1,92 @@
+# Structural check for the six-lab MicroHack content pack.
+# Scope: package structure only (labs, order, guide sections, solution pointer pages, Student ZIP contents).
+# It does not run lab code or validate provisioning or deployed resources.
+param([Parameter(Mandatory)][string]$Root)
+
+$labs = (Import-PowerShellDataFile -LiteralPath (Join-Path $PSScriptRoot 'Labs.psd1')).Labs
+
+$requiredSections = @('## Prerequisites', '## Follow-along (40-45 minutes)', '## Checkpoints', '## Troubleshooting')
+
+# Student ZIP per MicroHack contentPreparation rules (99-MicroHack-Template/labautomation/README.md):
+# ZIP root is the pack root; top-level files, walkthrough/, labautomation/ and challenge .md pages are not included;
+# studentZipExclusions remove a top-level entry by name or an exact path.
+$rootFull = (Resolve-Path -LiteralPath $Root).Path.TrimEnd('\', '/')
+$files = Get-ChildItem -LiteralPath $rootFull -Recurse -File -Force |
+    ForEach-Object { $_.FullName.Substring($rootFull.Length + 1) -replace '\\', '/' } |
+    Where-Object { $_ -notmatch '^\.git/' }
+$defaultsPath = Join-Path $rootFull 'labautomation/lab-defaults.json'
+$exclusions = @()
+if (Test-Path -LiteralPath $defaultsPath) {
+    $exclusions = @((Get-Content -LiteralPath $defaultsPath -Raw | ConvertFrom-Json).contentPreparation.studentZipExclusions)
+} else { 'Missing labautomation/lab-defaults.json' }
+$studentZip = @($files | Where-Object {
+    $path = $_
+    $path -match '/' -and
+    $path -notmatch '^(walkthrough|labautomation)/' -and
+    $path -notmatch '^challenges/.*\.md$' -and
+    -not ($exclusions | Where-Object { $_ -and ($path -ceq $_ -or $path.StartsWith("$_/", [StringComparison]::Ordinal)) })
+})
+$participantEntries = @('labs', 'challenges', 'img')
+
+$overviewPath = Join-Path $rootFull 'Readme.md'
+if (Test-Path -LiteralPath $overviewPath) {
+    $overview = Get-Content -LiteralPath $overviewPath -Raw
+    $overviewLinks = @([regex]::Matches($overview, '\]\(challenges/challenge-(\d+)\.md\)') | ForEach-Object { $_.Groups[1].Value })
+    if (($overviewLinks -join ',') -cne (($labs | ForEach-Object { $_.N }) -join ',')) {
+        'Readme.md must link to the six challenges in order'
+    }
+} else { 'Missing Readme.md' }
+
+foreach ($lab in $labs) {
+    $label = "Lab $($lab.N) ($($lab.Name))"
+    $challenge = "challenges/challenge-$($lab.N).md"
+    $challengePath = Join-Path $Root $challenge
+    if (Test-Path -LiteralPath $challengePath) {
+        $text = Get-Content -LiteralPath $challengePath -Raw
+        $title = "# Challenge $($lab.N): $($lab.Name)"
+        if (($text -split "`r?`n")[0].Trim() -ne $title) { "${label}: $challenge must be titled '$title'" }
+        $guideLink = "../labs/$($lab.Dir)/README.md"
+        if (-not $text.Contains("]($guideLink)")) { "${label}: $challenge must link to $guideLink" }
+    } else { "${label}: missing $challenge" }
+
+    # MicroHack discovery requires walkthrough/solution-NN.md; keep them as pointers to the shared lab guide.
+    $solution = "walkthrough/solution-$($lab.N).md"
+    $solutionPath = Join-Path $Root $solution
+    if (Test-Path -LiteralPath $solutionPath) {
+        $solutionTitle = "# Solution $($lab.N): $($lab.Name)"
+        $solutionPointer = "Follow the participant [lab guide](../labs/$($lab.Dir)/README.md)."
+        $lines = @(Get-Content -LiteralPath $solutionPath | ForEach-Object { $_.Trim() } | Where-Object { $_ })
+        if ($lines.Count -ne 2 -or $lines[0] -cne $solutionTitle -or $lines[1] -cne $solutionPointer) {
+            "${label}: $solution must contain only '$solutionTitle' and '$solutionPointer'"
+        }
+    } else { "${label}: missing $solution" }
+
+    $guide = "labs/$($lab.Dir)/README.md"
+    $guidePath = Join-Path $Root $guide
+    if (-not (Test-Path -LiteralPath $guidePath)) { "${label}: missing $guide"; continue }
+    if ($guide -notin $studentZip) { "${label}: Student ZIP is missing $guide" }
+    $sections = @(Get-Content -LiteralPath $guidePath | Where-Object { $_ -match '^## ' } | ForEach-Object { $_.Trim() })
+    foreach ($section in $requiredSections) {
+        if ($section -notin $sections) { "${label}: $guide is missing section '$section'" }
+    }
+    if ($sections.Count -eq 0 -or $sections[0] -ne $requiredSections[0]) {
+        "${label}: $guide must state '$($requiredSections[0])' as its first section"
+    }
+
+    $content = Get-Content -LiteralPath $guidePath -Raw
+    foreach ($other in ($labs | Where-Object { $_.Dir -ne $lab.Dir })) {
+        if ($content -and $content.Contains($other.Dir)) { "${label}: $guide references another lab ($($other.Dir))" }
+    }
+}
+
+$studentZip | ForEach-Object { ($_ -split '/')[0] } | Sort-Object -Unique |
+    Where-Object { $_ -notin $participantEntries } |
+    ForEach-Object { "Student ZIP includes repository-only entry '$_'" }
+
+$expectedSolutions = $labs | ForEach-Object { "walkthrough/solution-$($_.N).md" }
+$files | Where-Object { $_ -match '^walkthrough/' -and $_ -notin $expectedSolutions } |
+    ForEach-Object { "Unexpected walkthrough file: $_" }
+
+$expectedChallenges = $labs | ForEach-Object { "challenges/challenge-$($_.N).md" }
+$files | Where-Object { $_ -match '^challenges/[^/]+\.md$' -and $_ -notin $expectedChallenges } |
+    ForEach-Object { "Unexpected challenge page: $_" }

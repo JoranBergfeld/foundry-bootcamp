@@ -1,0 +1,13 @@
+{
+  "$schema": "https://raw.githubusercontent.com/microsoft/MicroHack/refs/heads/main/lab-defaults-schema.json",
+  "contentPreparation": {
+    "studentZipExclusions": ["AGENTS.md", "GLOSSARY.md", "docs", "tests", ".github"],
+    "banners": {
+      "solutions": {
+        "download": false,
+        "parentReadme": false
+      }
+    }
+  },
+  "Quality": "Testing"
+}
