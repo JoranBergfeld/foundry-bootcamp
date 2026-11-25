@@ -5,6 +5,9 @@ BeforeAll {
     function Get-AzResource { param($ResourceGroupName) }
     function Get-MhhStableHash { param($InputString, $Length) }
     function Remove-MhhResourceGroup { param($ResourceGroupName) }
+    function Get-AzResourceLock { param($ResourceGroupName) }
+    function Get-AzResourceGroupDeployment { param($ResourceGroupName) }
+    function Get-AzRoleAssignment { param($Scope) }
     function New-AzResourceGroupDeployment {
         param($Name, $ResourceGroupName, $TemplateFile, $TemplateParameterObject, $Mode)
     }
@@ -26,8 +29,26 @@ Describe 'MicroHack Foundry provisioning hook' {
             AllowedEntraUserIds = @('00000000-0000-0000-0000-000000000002')
         }
         Mock Get-AzContext { @{ Subscription = @{ Id = '00000000-0000-0000-0000-000000000001' } } }
-        Mock Get-AzResourceGroup { @{ ResourceGroupName = 'participant'; Location = 'region-first'; ProvisioningState = 'Succeeded' } }
+        Mock Get-AzResourceGroup {
+            @{
+                ResourceGroupName = 'participant'
+                ResourceId = '/subscriptions/00000000-0000-0000-0000-000000000001/resourceGroups/participant'
+                Location = 'region-first'
+                ProvisioningState = 'Succeeded'
+                Tags = @{ 'bootcamp-disposable-initial-scope' = 'true' }
+            }
+        }
         Mock Get-AzResource { @() }
+        Mock Get-AzResourceLock { @() }
+        Mock Get-AzResourceGroupDeployment { @() }
+        Mock Get-AzRoleAssignment {
+            @{
+                Scope = '/subscriptions/00000000-0000-0000-0000-000000000001/resourceGroups/participant'
+                ObjectId = '00000000-0000-0000-0000-000000000002'
+                RoleDefinitionId = '8e3af657-a8ff-443c-a75c-2fe8c4bcb635'
+                Condition = $null
+            }
+        }
         Mock Get-MhhStableHash { 'a1b2c3d4e5f6a1b2c3d4e5f6' }
         Mock Remove-MhhResourceGroup {
             @{ ManifestCaptured = $true; Errors = @(); SoftDeletedResidual = @() }
@@ -108,7 +129,15 @@ Describe 'MicroHack Foundry provisioning hook' {
     }
 
     It 'starts an empty organizer scope at the first preference instead of letting helper reuse reorder it' {
-        Mock Get-AzResourceGroup { @{ ResourceGroupName = 'participant'; Location = 'region-second'; ProvisioningState = 'Succeeded' } }
+        Mock Get-AzResourceGroup {
+            @{
+                ResourceGroupName = 'participant'
+                ResourceId = '/subscriptions/00000000-0000-0000-0000-000000000001/resourceGroups/participant'
+                Location = 'region-second'
+                ProvisioningState = 'Succeeded'
+                Tags = @{ 'bootcamp-disposable-initial-scope' = 'true' }
+            }
+        }
         & $script:Hook @script:Inputs | Out-Null
         Should -Invoke Remove-MhhResourceGroup -Times 1 -Exactly -ParameterFilter { $ResourceGroupName -eq 'participant' }
         Should -Invoke Invoke-MhhDeploymentWithRegionFallback -Times 1 -Exactly -ParameterFilter {
@@ -117,7 +146,15 @@ Describe 'MicroHack Foundry provisioning hook' {
     }
 
     It 'does not deploy after an incomplete empty-scope cleanup' {
-        Mock Get-AzResourceGroup { @{ ResourceGroupName = 'participant'; Location = 'region-second'; ProvisioningState = 'Succeeded' } }
+        Mock Get-AzResourceGroup {
+            @{
+                ResourceGroupName = 'participant'
+                ResourceId = '/subscriptions/00000000-0000-0000-0000-000000000001/resourceGroups/participant'
+                Location = 'region-second'
+                ProvisioningState = 'Succeeded'
+                Tags = @{ 'bootcamp-disposable-initial-scope' = 'true' }
+            }
+        }
         Mock Remove-MhhResourceGroup {
             @{ ManifestCaptured = $true; Errors = @('cleanup failed'); SoftDeletedResidual = @() }
         }
@@ -146,6 +183,65 @@ Describe 'MicroHack Foundry provisioning hook' {
         Should -Invoke Invoke-MhhDeploymentWithRegionFallback -Times 1 -ParameterFilter {
             ($PreferredLocations -join ',') -eq 'region-first,region-second'
         }
+    }
+
+    It 'refuses destructive initial fallback without an organizer disposable-scope tag' {
+        Mock Get-AzResourceGroup {
+            @{
+                ResourceGroupName = 'participant'
+                Location = 'region-first'
+                ProvisioningState = 'Succeeded'
+                Tags = @{}
+            }
+        }
+        { & $script:Hook @script:Inputs } | Should -Throw '*not explicitly marked disposable*'
+        Should -Invoke Invoke-MhhDeploymentWithRegionFallback -Times 0
+        Should -Invoke Remove-MhhResourceGroup -Times 0
+    }
+
+    It 'preserves existing RG metadata instead of treating resource-empty as disposable: <Metadata>' -ForEach @(
+        @{ Metadata = 'tags' }
+        @{ Metadata = 'locks' }
+        @{ Metadata = 'deployment history' }
+        @{ Metadata = 'extra access grants' }
+        @{ Metadata = 'conditional Owner access' }
+    ) {
+        switch ($Metadata) {
+            'tags' {
+                Mock Get-AzResourceGroup {
+                    @{
+                        ResourceGroupName = 'participant'
+                        Location = 'region-first'
+                        ProvisioningState = 'Succeeded'
+                        Tags = @{ 'bootcamp-disposable-initial-scope' = 'true'; 'platform-allocation' = 'keep' }
+                    }
+                }
+            }
+            'locks' { Mock Get-AzResourceLock { @{ Name = 'keep-platform-scope' } } }
+            'deployment history' { Mock Get-AzResourceGroupDeployment { @{ DeploymentName = 'prior-work' } } }
+            'extra access grants' {
+                Mock Get-AzRoleAssignment {
+                    @{
+                        Scope = '/subscriptions/00000000-0000-0000-0000-000000000001/resourceGroups/participant'
+                        ObjectId = '00000000-0000-0000-0000-000000000099'
+                        RoleDefinitionId = '8e3af657-a8ff-443c-a75c-2fe8c4bcb635'
+                    }
+                }
+            }
+            'conditional Owner access' {
+                Mock Get-AzRoleAssignment {
+                    @{
+                        Scope = '/subscriptions/00000000-0000-0000-0000-000000000001/resourceGroups/participant'
+                        ObjectId = '00000000-0000-0000-0000-000000000002'
+                        RoleDefinitionId = '8e3af657-a8ff-443c-a75c-2fe8c4bcb635'
+                        Condition = 'a platform access constraint'
+                    }
+                }
+            }
+        }
+        { & $script:Hook @script:Inputs } | Should -Throw '*not disposable*'
+        Should -Invoke Invoke-MhhDeploymentWithRegionFallback -Times 0
+        Should -Invoke Remove-MhhResourceGroup -Times 0
     }
 
     It 'rejects a wrong authenticated subscription without switching context' {

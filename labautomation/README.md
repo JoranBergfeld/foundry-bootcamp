@@ -97,10 +97,24 @@ variables: organizers must arrange this on their runner. Without it, the hook
 remains safely incremental and offers no fallback.
 
 The fallback helper is used only when this opt-in is present **and the target
-RG is absent or contains zero resources**. It receives platform regions in
-order, plus participant IDs so that MicroHack restores RG Owner after
-recreation. Because the helper otherwise prioritizes an existing RG's location,
-an empty initial RG in a different region is removed with
+RG is absent or demonstrably disposable**. Resource-empty alone is insufficient:
+a pre-existing RG must be explicitly marked by the organizer with the sole tag
+`bootcamp-disposable-initial-scope=true`, have `Succeeded` provisioning state,
+no resource locks, no deployment history, and no direct RG role assignments
+other than unconditional Owner for the supplied participant IDs. These checks
+occur before either destructive helper, including when the RG is already in
+preference #1.
+Unmarked scopes, additional tags, locks, history or access grants cause an
+explicit failure; do not strip platform metadata to force fallback. Instead,
+unset the process opt-in and retain the scope using incremental provisioning.
+Metadata listing errors also stop provisioning rather than authorizing deletion.
+
+The helper receives platform regions in order, plus participant IDs so that
+MicroHack restores the **only permitted direct grants**, participant RG Owner,
+after recreation. Inherited subscription access is unaffected. Any other
+RG-scoped platform access prevents fallback. Because the helper otherwise
+prioritizes an existing RG's location, a disposable initial RG in a different
+region is removed with
 `Remove-MhhResourceGroup` first, with cleanup results checked, so that the first
 supplied preference really is tried first.
 
@@ -139,15 +153,16 @@ From the repository root, with PowerShell 7, Pester 6 and Azure CLI/Bicep:
 
 ```powershell
 $result = Invoke-Pester -Path tests\provisioning -Output Detailed -PassThru
-if ($result.FailedCount) { throw 'Provisioning tests failed' }
+if ($result.Result -ne 'Passed') { throw 'Provisioning tests failed' }
 az bicep lint --file labautomation\foundry-core.bicep
 ```
 
 Tests invoke the real hook, substituting only platform/Azure external commands,
 and compile/inspect the ARM deployment artifact without deploying it. They
 exercise region input/order, organizer gating, in-place reruns, platform scope
-and identity inputs, success-only credential publication and declared
-keyless resources/models. Compilation checks schema/types, not subscription
+and identity inputs, pre-existing RG metadata/access preservation, success-only
+credential publication and declared keyless resources/models.
+Compilation checks schema/types, not subscription
 policy, live availability, quota or runtime endpoint contents.
 
 **Not observed:** a live MicroHack hook run, cloud deployment/ARM validation,

@@ -41,6 +41,26 @@ $parameters = @{ participantObjectIds = $AllowedEntraUserIds }
 
 # The MicroHack helper can delete the entire RG on recycle, including same-region retries.
 if ($env:BOOTCAMP_ORGANIZER_INITIAL_PROVISIONING -ceq 'true' -and $resources.Count -eq 0) {
+    if ($group) {
+        if (-not $group.Tags -or $group.Tags['bootcamp-disposable-initial-scope'] -cne 'true') {
+            throw 'Initial resource group is not explicitly marked disposable. Retain the scope and use incremental provisioning.'
+        }
+        if ($group.Tags.Count -ne 1 -or $group.ProvisioningState -ne 'Succeeded') {
+            throw 'Initial resource group is not disposable: existing metadata or an active lifecycle operation must be preserved.'
+        }
+        $locks = @(Get-AzResourceLock -ResourceGroupName $ResourceGroupName)
+        $history = @(Get-AzResourceGroupDeployment -ResourceGroupName $ResourceGroupName)
+        $extraAccess = @(Get-AzRoleAssignment -Scope $group.ResourceId | Where-Object {
+            $_.Scope -eq $group.ResourceId -and (
+                $_.ObjectId -notin $AllowedEntraUserIds -or
+                ($_.RoleDefinitionId -split '/')[-1] -ne '8e3af657-a8ff-443c-a75c-2fe8c4bcb635' -or
+                -not [string]::IsNullOrWhiteSpace($_.Condition)
+            )
+        })
+        if ($locks.Count -gt 0 -or $history.Count -gt 0 -or $extraAccess.Count -gt 0) {
+            throw 'Initial resource group is not disposable: locks, deployment history or additional RG access grants must be preserved.'
+        }
+    }
     # Its reuse phase otherwise tries an existing RG's region before the first preference.
     if ($group -and $group.Location -ne $regions[0]) {
         $teardown = Remove-MhhResourceGroup -ResourceGroupName $ResourceGroupName
