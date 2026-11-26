@@ -36,7 +36,7 @@ function Invoke-FakeAzureDataPlane {
         if ($key -eq '/baseline' -and $methodName -eq 'Get' -and $url.Query -match 'comp=list') {
             $names = @($State.Blobs.Keys | Where-Object { $_ -like '/baseline/dataset-v1/*' } |
                 ForEach-Object { "<Blob><Name>$([Security.SecurityElement]::Escape($_.Substring('/baseline/'.Length)))</Name></Blob>" })
-            $xml = "<EnumerationResults><Blobs>$($names -join '')</Blobs><NextMarker /></EnumerationResults>"
+            $xml = "$([char]0xFEFF)<?xml version=`"1.0`" encoding=`"utf-8`"?><EnumerationResults><Blobs>$($names -join '')</Blobs><NextMarker /></EnumerationResults>"
             return [pscustomobject]@{ StatusCode = 200; Content = $xml; Headers = @{} }
         }
         if ($methodName -eq 'Head') {

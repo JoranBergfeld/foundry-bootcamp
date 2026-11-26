@@ -171,7 +171,8 @@ do {
         '?restype=container&comp=list&prefix=dataset-v1%2F'
     if ($marker) { $uri += "&marker=$([uri]::EscapeDataString($marker))" }
     $response = Invoke-BaselineRequest -Uri $uri -Method Get -ResourceUrl 'https://storage.azure.com/'
-    $listing = [xml]$response.Content
+    # Blob Storage prefixes the listing with a UTF-8 byte-order mark, which [xml] rejects.
+    $listing = [xml]([string]$response.Content).TrimStart([char]0xFEFF)
     foreach ($node in $listing.SelectNodes('/EnumerationResults/Blobs/Blob/Name')) {
         $name = $node.InnerText
         if (-not $expectedBlobs.Contains($name)) {
