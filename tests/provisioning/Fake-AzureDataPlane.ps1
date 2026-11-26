@@ -8,6 +8,7 @@ function New-FakeAzureDataPlane {
         ResetRequested = $false
         RepairRows = $null
         IndexedRows = 0
+        StoragePublicNetworkAccess = 'Enabled'
     }
 }
 
@@ -28,6 +29,9 @@ function Invoke-FakeAzureDataPlane {
     }
 
     if ($url.Host -eq 'stexample.blob.core.windows.net') {
+        if ($State.StoragePublicNetworkAccess -ne 'Enabled') {
+            return [pscustomobject]@{ StatusCode = 403; Content = 'Storage public network access is disabled by policy.'; Headers = @{} }
+        }
         $key = $url.AbsolutePath
         if ($key -eq '/baseline' -and $methodName -eq 'Get' -and $url.Query -match 'comp=list') {
             $names = @($State.Blobs.Keys | Where-Object { $_ -like '/baseline/dataset-v1/*' } |
