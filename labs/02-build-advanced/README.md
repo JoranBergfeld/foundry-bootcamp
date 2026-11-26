@@ -158,3 +158,8 @@ pre-indexed ticket dataset, text-only semantic retrieval and Foundry
 playground. Permission to import, adapt and distribute this material was
 confirmed for this bootcamp; it is not a public license or a broader reuse
 grant. See [the sourcing decision](https://github.com/JoranBergfeld/foundry-bootcamp/issues/12).
+
+The shared baseline uses [Synthetic IT Support Tickets](https://www.kaggle.com/datasets/ahsanneural/synthetic-it-support-tickets)
+by Muhammad Ahsan, [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/).
+Provisioning splits the original CSV into shards and normalizes line endings;
+ticket values are unchanged.

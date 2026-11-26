@@ -142,7 +142,9 @@ Run ``az login`` first.
 
     It 'reports a missing Lab 02 participant script in the Student ZIP' {
         $root = New-ValidPack
-        Remove-Item (Join-Path $root 'labs/02-build-advanced/lab.ps1')
+        Write-PackFile $root 'labautomation/lab-defaults.json' (@{
+            contentPreparation = @{ studentZipExclusions = @('docs', 'AGENTS.md', 'GLOSSARY.md', 'tests', 'labs/02-build-advanced/lab.ps1') }
+        } | ConvertTo-Json -Depth 5)
 
         Invoke-Check $root | Should -Contain 'Lab 02: Student ZIP is missing labs/02-build-advanced/lab.ps1'
     }
