@@ -44,6 +44,11 @@ and Application Insights tracing (#16), plus the pre-indexed baseline dataset
   MicroHack after checking quota; there is no quota reservation or model/SKU
   substitution in this hook. GlobalStandard processing is global, not a promise
   of region-confined processing.
+- Ensure the MicroHack runner and Search indexer have a permitted network path
+  to Storage. An inherited policy disabled public network access in a
+  validation subscription despite the template's request. Use a compliant
+  network path or an organization-approved policy exemption where appropriate;
+  this hook does not create an exemption.
 - Do not run two provisioning jobs concurrently against the same participant
   scope. MicroHack owns allocation, control-plane access, environment lifetime
   and eventual teardown.
@@ -67,9 +72,9 @@ The RG-scoped `foundry-core.bicep` declares these choices, using the stable
 Capacity values are Azure deployment capacity units, **not** participant counts
 or a cross-model RPM guarantee. Check each model's current capacity-to-TPM/RPM
 mapping, minimum/step size and subscription quota in the chosen regions.
-GlobalStandard is documented for both models; this does not establish
-availability in any particular platform-supplied region. No region was supplied
-or queried against an event subscription during implementation.
+Both models were deployed in a Sweden Central MicroHack validation environment.
+This does not establish availability or quota in other subscriptions, regions
+or subsequent events.
 
 As checked on 2026-11-25, the Microsoft retirement schedule lists the chat model
 as GA through 2027-09-21 and the embedding model as GA through 2028-02-09.
@@ -182,8 +187,8 @@ Do not delete or reset participant resources to recover a failure.
 
 `ProjectManagedIdentity` is accepted by the Foundry resource provider and SDK
 but is not yet in the published `2025-06-01` Bicep types, so the template
-suppresses BCP036 for those two connections. This has not been validated by a
-live deployment.
+suppresses BCP036 for those two connections. Both connections were accepted in
+the MicroHack validation deployment; trace ingestion remains unverified.
 
 ## Initial provisioning versus retries
 
@@ -289,14 +294,14 @@ indexer/query readiness, and declared keyless resources/models.
 Compilation checks schema/types, not subscription
 policy, live availability, quota or runtime endpoint contents.
 
-**Not observed:** a live MicroHack hook run, cloud deployment/ARM validation,
-initial region exhaustion, actual Entra inference/RBAC propagation, runtime
-project endpoint, live Search/Storage upload, indexing and participant queries,
-trace ingestion through the
-`ProjectManagedIdentity` connection, participant dashboard rendering and retention of participant
-work across a live rerun. These require explicit authorization for an
-organizer-owned disposable environment. Do not equate the local tests or a
-content-pack import with those acceptance checks.
+A MicroHack hook run successfully deployed the shared ARM resources in one
+validation environment. **Not observed:** initial region exhaustion, actual
+Entra inference/RBAC propagation, runtime project endpoint, live Search/Storage
+upload, indexing and participant queries, trace ingestion through the
+`ProjectManagedIdentity` connection, participant dashboard rendering and
+retention of participant work across a live rerun. These require explicit
+authorization for an organizer-owned disposable environment. Do not equate
+the local tests or a content-pack import with those acceptance checks.
 
 ## Primary-source contract
 
