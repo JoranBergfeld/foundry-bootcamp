@@ -29,55 +29,6 @@ if ($DeploymentType -eq 'subscription') {
     throw "ResourceGroupName must be provided for DeploymentType '$DeploymentType'."
 }
 
-$storagePolicyExemption = $null
-if (-not [string]::IsNullOrWhiteSpace($env:BOOTCAMP_STORAGE_POLICY_EXEMPTION)) {
-    $document = $null
-    try {
-        $document = [System.Text.Json.JsonDocument]::Parse($env:BOOTCAMP_STORAGE_POLICY_EXEMPTION)
-        $storagePolicyExemption = ConvertFrom-Json -InputObject $env:BOOTCAMP_STORAGE_POLICY_EXEMPTION `
-            -AsHashtable -ErrorAction Stop
-        if ($document.RootElement.ValueKind -eq [System.Text.Json.JsonValueKind]::Object -and
-            $storagePolicyExemption.Contains('expiresOn')) {
-            # ConvertFrom-Json coerces ISO dates on older PowerShell; preserve the original UTC string.
-            $expiresOn = $document.RootElement.GetProperty('expiresOn')
-            $storagePolicyExemption.expiresOn = if ($expiresOn.ValueKind -eq [System.Text.Json.JsonValueKind]::String) {
-                $expiresOn.GetString()
-            } else { $null }
-        }
-    } catch {
-        throw 'BOOTCAMP_STORAGE_POLICY_EXEMPTION must be a valid JSON object.'
-    } finally {
-        if ($null -ne $document) { $document.Dispose() }
-    }
-    $required = @('policyAssignmentId', 'policyDefinitionReferenceIds', 'expiresOn', 'description')
-    if ($storagePolicyExemption -isnot [System.Collections.IDictionary] -or
-        @($required | Where-Object { -not $storagePolicyExemption.Contains($_) }).Count -gt 0 -or
-        @($storagePolicyExemption.Keys | Where-Object { $_ -notin $required }).Count -gt 0) {
-        throw "BOOTCAMP_STORAGE_POLICY_EXEMPTION must contain exactly: $($required -join ', ')."
-    }
-    $assignmentId = $storagePolicyExemption.policyAssignmentId
-    if ($assignmentId -isnot [string] -or $assignmentId -notmatch
-        '^/(subscriptions/[^/]+(?:/resourceGroups/[^/]+)?|providers/Microsoft.Management/managementGroups/[^/]+)/providers/Microsoft.Authorization/policyAssignments/[^/\s]+$') {
-        throw 'BOOTCAMP_STORAGE_POLICY_EXEMPTION requires a full policy assignment resource ID.'
-    }
-    $references = $storagePolicyExemption.policyDefinitionReferenceIds
-    if ($references -isnot [array] -or $references.Count -eq 0 -or
-        @($references | Where-Object { $_ -isnot [string] -or [string]::IsNullOrWhiteSpace($_) }).Count -gt 0) {
-        throw 'BOOTCAMP_STORAGE_POLICY_EXEMPTION requires a nonempty array of approved network policy definition reference IDs; whole-initiative exemptions are not supported.'
-    }
-    $expiry = [DateTimeOffset]::MinValue
-    if ($storagePolicyExemption.expiresOn -isnot [string] -or
-        -not [DateTimeOffset]::TryParseExact($storagePolicyExemption.expiresOn, "yyyy-MM-ddTHH:mm:ss'Z'",
-            [Globalization.CultureInfo]::InvariantCulture, [Globalization.DateTimeStyles]::AssumeUniversal, [ref]$expiry) -or
-        $expiry -le [DateTimeOffset]::UtcNow) {
-        throw 'BOOTCAMP_STORAGE_POLICY_EXEMPTION requires a future UTC expiresOn in yyyy-MM-ddTHH:mm:ssZ format.'
-    }
-    if ($storagePolicyExemption.description -isnot [string] -or
-        [string]::IsNullOrWhiteSpace($storagePolicyExemption.description)) {
-        throw 'BOOTCAMP_STORAGE_POLICY_EXEMPTION requires an organizer-supplied approval description.'
-    }
-}
-
 $context = Get-AzContext
 if (-not $context -or $context.Subscription.Id -ne $SubscriptionId) {
     throw 'The authenticated subscription must match SubscriptionId. MicroHack must supply the authenticated context.'
@@ -113,10 +64,22 @@ try {
 
 $group = Get-AzResourceGroup | Where-Object { $_.ResourceGroupName -eq $ResourceGroupName }
 $resources = @(if ($group) { Get-AzResource -ResourceGroupName $ResourceGroupName })
+$existingStorageAccountTags = @{}
+foreach ($resource in $resources) {
+    if ($resource.ResourceType -ne 'Microsoft.Storage/storageAccounts') { continue }
+    $tags = @{}
+    if ($null -ne $resource.Tags) {
+        foreach ($name in $resource.Tags.Keys) {
+            if ($name -ine 'SecurityControl') { $tags[$name] = $resource.Tags[$name] }
+        }
+    }
+    $existingStorageAccountTags[$resource.Name] = $tags
+}
 $template = Join-Path $PSScriptRoot 'foundry-core.bicep'
-$parameters = @{ participantObjectIds = $AllowedEntraUserIds; provisionerObjectId = $provisionerId.ToString() }
-if ($null -ne $storagePolicyExemption) {
-    $parameters.storagePolicyExemption = $storagePolicyExemption
+$parameters = @{
+    participantObjectIds = $AllowedEntraUserIds
+    provisionerObjectId = $provisionerId.ToString()
+    existingStorageAccountTags = $existingStorageAccountTags
 }
 
 # The MicroHack helper can delete the entire RG on recycle, including same-region retries.
