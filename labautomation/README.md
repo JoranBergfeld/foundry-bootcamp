@@ -48,7 +48,8 @@ and Application Insights tracing (#16), plus the pre-indexed baseline dataset
   to Storage. An inherited policy disabled public network access in a
   validation subscription despite the template's request. Use a compliant
   network path or an organization-approved policy exemption where appropriate;
-  this hook does not create an exemption.
+  the opt-in exemption below is deployed as infrastructure as code before
+  Storage is created.
 - Do not run two provisioning jobs concurrently against the same participant
   scope. MicroHack owns allocation, control-plane access, environment lifetime
   and eventual teardown.
@@ -132,6 +133,69 @@ idempotent):
 If the provisioner is also a supplied participant, its participant roles
 already cover these operations and duplicate role assignments are avoided.
 All role assignments use stable resource/principal/role-derived names.
+
+## Approved Storage network policy exemption
+
+An inherited `modify` policy can replace the template's
+`publicNetworkAccess: Enabled` with `Disabled`. A data-plane role assignment
+cannot fix that network block. For an event that requires public Entra-authenticated
+access from the MicroHack runner, Search indexer and participant workstations,
+obtain policy-owner approval for the specific network policy first.
+
+Set `BOOTCAMP_STORAGE_POLICY_EXEMPTION` to a JSON object in the **provisioner
+job process environment**, before invoking the unchanged five-parameter hook:
+
+```powershell
+$env:BOOTCAMP_STORAGE_POLICY_EXEMPTION = @{
+    policyAssignmentId = '/providers/Microsoft.Management/managementGroups/<group>/providers/Microsoft.Authorization/policyAssignments/<assignment>'
+    policyDefinitionReferenceIds = @('<approved-storage-network-policy-reference>')
+    expiresOn = '<approved-expiry-in-yyyy-MM-ddTHH:mm:ssZ-format>'
+    description = '<policy-owner approval reference and event justification>'
+} | ConvertTo-Json -Compress
+```
+
+Organizers must arrange runner environment injection; no MicroHack UI support
+is assumed. Remove the variable after the job. Do not put approval details in
+participant credentials or replace placeholders with a hardcoded tenant-wide
+assignment in the template. In the inspected validation policy, the initiative
+reference was `storageaccountpublicnetworkmodify`; discover the actual
+assignment ID and reference in each event subscription instead of assuming
+that name applies everywhere.
+
+The hook requires exactly those four properties, a full assignment ID,
+a nonempty array of specific initiative references, a future UTC expiry, and
+an approval description. Empty reference arrays (whole-initiative waivers),
+malformed or expired configurations fail before Azure operations. Only supply
+approved Storage **network** references, never authentication or anonymous-access
+policies. Without the variable, no exemption is created and existing behavior
+is unchanged; a blocked upload still fails without publishing credentials.
+
+`foundry-core.bicep` creates `bootcamp-storage-network` using
+`Microsoft.Authorization/policyExemptions@2022-07-01-preview`, in the `Waiver`
+category, at the **participant resource group** scope. A resource-type selector
+limits it to Storage accounts, and the reference list limits it to the selected
+policies within one initiative. RG scope is required so the exemption can exist
+before the first Storage create request; Storage explicitly depends on it.
+This is not a subscription-wide waiver. It applies to all Storage accounts in
+that participant RG, so use a dedicated participant scope. The same stable
+exemption name and expiry are used on incremental and initial-fallback paths;
+reruns do not automatically extend the approved expiry.
+
+The provisioner needs `Microsoft.Authorization/policyExemptions/write` at the
+participant scope **and** `Microsoft.Authorization/policyAssignments/exempt/action`
+on the targeted assignment. Subscription Owner alone does not provide that
+action on an inherited management-group assignment. An authorization failure
+stops deployment; the hook does not grant itself additional rights or bypass
+assignment-scope validation.
+See [Azure Policy exemption permissions and expiry](https://learn.microsoft.com/en-us/azure/governance/policy/concepts/exemption-structure).
+
+Public network access does **not** enable anonymous blobs or shared keys:
+both remain disabled, the container remains private, and uploads and Search
+indexing still use Entra identities. Expiry stops Azure from honoring the
+waiver; it does not delete the exemption or immediately change the Storage
+network setting. Organizers must retire the environment or restore a compliant
+network configuration when approval ends. Removing the variable on an
+incremental rerun does not delete an already-created exemption.
 
 ## Shared baseline dataset
 
@@ -290,7 +354,11 @@ exercise region input/order, standard first-run RG creation, existing-RG region
 checks, organizer gating, in-place reruns, platform scope
 and identity inputs, pre-existing RG metadata/access preservation, success-only
 credential publication, the pinned source archive, safe dataset sharding,
-indexer/query readiness, and declared keyless resources/models.
+indexer/query readiness, and declared keyless resources/models. Network-policy
+regressions reproduce blocked Storage access, check exemption ordering and
+scope in the compiled template, reject incomplete/expired configuration, and
+run both provisioning paths through all ten shards, 100,000 indexed tickets,
+the expected 20-field schema and the known-ticket query.
 Compilation checks schema/types, not subscription
 policy, live availability, quota or runtime endpoint contents.
 
@@ -299,7 +367,9 @@ validation environment. **Not observed:** initial region exhaustion, actual
 Entra inference/RBAC propagation, runtime project endpoint, live Search/Storage
 upload, indexing and participant queries, trace ingestion through the
 `ProjectManagedIdentity` connection, participant dashboard rendering and
-retention of participant work across a live rerun. These require explicit
+retention of participant work across a live rerun. Live exemption creation,
+policy propagation and the provisioner's inherited-assignment exemption
+permission also remain unverified. These require explicit
 authorization for an organizer-owned disposable environment. Do not equate
 the local tests or a content-pack import with those acceptance checks.
 

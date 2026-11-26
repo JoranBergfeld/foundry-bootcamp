@@ -11,6 +11,9 @@ param participantObjectIds array
 @description('Object ID of the authenticated MicroHack provisioner.')
 param provisionerObjectId string
 
+@description('Optional organizer-approved Storage network policy waiver, validated by deploy-lab.ps1. Supply policyAssignmentId, policyDefinitionReferenceIds, expiresOn and description; an empty object creates no exemption.')
+param storagePolicyExemption object = {}
+
 var accountName = 'foundry-${uniqueString(resourceGroup().id)}'
 var projectName = 'bootcamp'
 var searchName = 'srch-${uniqueString(resourceGroup().id)}'
@@ -129,6 +132,33 @@ resource search 'Microsoft.Search/searchServices@2025-05-01' = {
   }
 }
 
+// RG scope allows the exemption to exist before the first Storage create/modify request.
+resource storageNetworkExemption 'Microsoft.Authorization/policyExemptions@2022-07-01-preview' = if (!empty(storagePolicyExemption)) {
+  name: 'bootcamp-storage-network'
+  properties: {
+    displayName: 'Winter Bootcamp Storage network access'
+    description: storagePolicyExemption.description
+    exemptionCategory: 'Waiver'
+    assignmentScopeValidation: 'Default'
+    policyAssignmentId: storagePolicyExemption.policyAssignmentId
+    policyDefinitionReferenceIds: storagePolicyExemption.policyDefinitionReferenceIds
+    expiresOn: storagePolicyExemption.expiresOn
+    resourceSelectors: [
+      {
+        name: 'storage-accounts-only'
+        selectors: [
+          {
+            kind: 'resourceType'
+            in: [
+              'Microsoft.Storage/storageAccounts'
+            ]
+          }
+        ]
+      }
+    ]
+  }
+}
+
 resource storage 'Microsoft.Storage/storageAccounts@2024-01-01' = {
   name: storageName
   location: location
@@ -145,6 +175,9 @@ resource storage 'Microsoft.Storage/storageAccounts@2024-01-01' = {
     supportsHttpsTrafficOnly: true
     publicNetworkAccess: 'Enabled'
   }
+  dependsOn: [
+    storageNetworkExemption
+  ]
 }
 
 resource blobService 'Microsoft.Storage/storageAccounts/blobServices@2024-01-01' = {
