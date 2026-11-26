@@ -664,7 +664,14 @@ Describe 'MicroHack Foundry provisioning hook' {
         $container[0].name | Should -Match 'baseline'
         $arm.outputs.SearchEndpoint.type | Should -Be 'string'
         $arm.outputs.StorageAccountName.type | Should -Be 'string'
-        $core.Text | Should -Not -Match 'listKeys|listAdminKeys|listQueryKeys|ConnectionString|InstrumentationKey'
+        $core.Text | Should -Not -Match 'listKeys|listAdminKeys|listQueryKeys|InstrumentationKey'
+        $tracing = @($arm.resources | Where-Object {
+            $_.type -eq 'Microsoft.CognitiveServices/accounts/projects/connections' -and
+            $_.properties.category -eq 'AppInsights'
+        })
+        $tracing.Count | Should -Be 1
+        $tracing[0].properties.metadata.Remove('ApplicationInsightsConnectionString')
+        ($arm | ConvertTo-Json -Depth 100) | Should -Not -Match 'ConnectionString|InstrumentationKey'
     }
 
     It 'connects workspace-based Application Insights to the Foundry project for keyless tracing' {
@@ -682,6 +689,8 @@ Describe 'MicroHack Foundry provisioning hook' {
         $connection[0].properties.authType | Should -Be 'ProjectManagedIdentity'
         $connection[0].properties.Keys | Should -Not -Contain 'credentials'
         $connection[0].properties.target | Should -Match 'Microsoft.Insights/components'
+        $connection[0].properties.metadata.ApplicationInsightsConnectionString |
+            Should -Match "reference\(resourceId\('Microsoft\.Insights/components'.*\.ConnectionString"
         $publisher = @(Get-RoleGrants $arm | Where-Object Role -Match '3913510d-42f4-4e42-8a64-420c390055eb')
         $publisher.Count | Should -Be 1
         $publisher[0].Principal | Should -Match 'accounts/projects'
@@ -769,5 +778,14 @@ Describe 'MicroHack Foundry provisioning hook' {
         }
         $arm.outputs.ChatDeploymentName.value | Should -Be 'bootcamp-chat'
         $arm.outputs.EmbeddingDeploymentName.value | Should -Be 'bootcamp-embedding'
+    }
+
+    It 'serializes Foundry project and model updates on the shared account' {
+        $arm = (Get-CompiledCore).Arm
+        $models = @($arm.resources | Where-Object type -eq 'Microsoft.CognitiveServices/accounts/deployments')
+        $chat = $models | Where-Object { $_.properties.model.name -eq 'gpt-5.4-mini' }
+        $embedding = $models | Where-Object { $_.properties.model.name -eq 'text-embedding-3-small' }
+        $chat.dependsOn | Should -Contain "[resourceId('Microsoft.CognitiveServices/accounts/projects', variables('accountName'), variables('projectName'))]"
+        $embedding.dependsOn | Should -Contain "[resourceId('Microsoft.CognitiveServices/accounts/deployments', variables('accountName'), 'bootcamp-chat')]"
     }
 }

@@ -79,6 +79,9 @@ foreach ($lab in $labs) {
     }
 }
 
+$lab02Script = 'labs/02-build-advanced/lab.ps1'
+if ($lab02Script -notin $studentZip) { "Lab 02: Student ZIP is missing $lab02Script" }
+
 $studentZip | ForEach-Object { ($_ -split '/')[0] } | Sort-Object -Unique |
     Where-Object { $_ -notin $participantEntries } |
     ForEach-Object { "Student ZIP includes repository-only entry '$_'" }

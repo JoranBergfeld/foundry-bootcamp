@@ -46,6 +46,7 @@ BeforeAll {
 - Fix.
 "@
         }
+        Write-PackFile $root 'labs/02-build-advanced/lab.ps1' '# Participant script'
         $root
     }
 
@@ -137,6 +138,15 @@ Run ``az login`` first.
         } | ConvertTo-Json -Depth 5)
 
         Invoke-Check $root | Should -Contain 'Lab 02 (Build it (advanced, with advanced RAG)): Student ZIP is missing labs/02-build-advanced/README.md'
+    }
+
+    It 'reports a missing Lab 02 participant script in the Student ZIP' {
+        $root = New-ValidPack
+        Write-PackFile $root 'labautomation/lab-defaults.json' (@{
+            contentPreparation = @{ studentZipExclusions = @('docs', 'AGENTS.md', 'GLOSSARY.md', 'tests', 'labs/02-build-advanced/lab.ps1') }
+        } | ConvertTo-Json -Depth 5)
+
+        Invoke-Check $root | Should -Contain 'Lab 02: Student ZIP is missing labs/02-build-advanced/lab.ps1'
     }
 
     It 'reports a missing solution pointer page' {

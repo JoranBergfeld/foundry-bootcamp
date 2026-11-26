@@ -44,6 +44,11 @@ and Application Insights tracing (#16), plus the pre-indexed baseline dataset
   MicroHack after checking quota; there is no quota reservation or model/SKU
   substitution in this hook. GlobalStandard processing is global, not a promise
   of region-confined processing.
+- Ensure the MicroHack runner and Search indexer have a permitted network path
+  to Storage. An inherited policy disabled public network access in a
+  validation subscription despite the template's request. Use a compliant
+  network path or an organization-approved policy exemption where appropriate;
+  this hook does not create an exemption.
 - Do not run two provisioning jobs concurrently against the same participant
   scope. MicroHack owns allocation, control-plane access, environment lifetime
   and eventual teardown.
@@ -67,17 +72,19 @@ The RG-scoped `foundry-core.bicep` declares these choices, using the stable
 Capacity values are Azure deployment capacity units, **not** participant counts
 or a cross-model RPM guarantee. Check each model's current capacity-to-TPM/RPM
 mapping, minimum/step size and subscription quota in the chosen regions.
-GlobalStandard is documented for both models; this does not establish
-availability in any particular platform-supplied region. No region was supplied
-or queried against an event subscription during implementation.
+Both models were deployed in a Sweden Central MicroHack validation environment.
+This does not establish availability or quota in other subscriptions, regions
+or subsequent events.
 
 As checked on 2026-11-25, the Microsoft retirement schedule lists the chat model
 as GA through 2027-09-21 and the embedding model as GA through 2028-02-09.
 Both deployments use `NoAutoUpgrade` to avoid unexpected version changes;
 organizers must review lifecycle dates and update/revalidate before later
 events. Deployments are serialized to avoid concurrent account model updates.
-Changing declared model names, versions, deployment names or capacity is an
-organizer-reviewed infrastructure change, not between-lab recovery.
+The project is deployed before the models to avoid concurrent account
+operations. Changing declared model names, versions, deployment names or
+capacity is an organizer-reviewed infrastructure change, not between-lab
+recovery.
 
 The account and project have system-assigned managed identities. Account local
 authentication is disabled; public endpoints remain enabled for participant
@@ -85,7 +92,8 @@ Entra authentication. Each supplied participant receives Azure AI User
 (`53ca6127-db72-4b80-b1b0-d745d6d5456d`) scoped to the Foundry account. Current
 Microsoft documentation displays this unchanged built-in role as **Foundry
 User**. MicroHack retains ownership of participant control-plane roles.
-No key, password, token or connection string is retrieved or published.
+No service key, password, access token or connection string is included in
+participant-facing deployment outputs.
 
 ## Search, Storage and tracing
 
@@ -96,7 +104,16 @@ No key, password, token or connection string is retrieved or published.
 | Baseline container | `baseline` (private); contains the shared ticket dataset |
 | Log Analytics | `log-<uniqueString>`, PerGB2018, 30-day retention, local auth disabled |
 | Application Insights | `appi-<uniqueString>`, workspace-based, local auth disabled |
-| Project connections | `bootcamp-tracing` (AppInsights) and `bootcamp-search` (CognitiveSearch), both `ProjectManagedIdentity`, no stored credentials |
+| Project connections | `bootcamp-tracing` (AppInsights) and `bootcamp-search` (CognitiveSearch), both `ProjectManagedIdentity`, no stored authentication credentials |
+
+Azure requires the Application Insights connection string as routing metadata
+on `bootcamp-tracing`. ARM retrieves it from the Application Insights resource;
+it is stored in the project connection and can be read by identities with
+access to that connection. It is not included in deployment outputs or
+HackboxCredential. Its instrumentation key is a
+[resource identifier, not a security key](https://learn.microsoft.com/en-us/azure/azure-monitor/app/connection-strings);
+the connection is configured to use the project managed identity for trace
+ingestion, with local authentication disabled.
 
 Role assignments (stable `guid(scope, principal, role)` names, so reruns are
 idempotent):
@@ -170,8 +187,8 @@ Do not delete or reset participant resources to recover a failure.
 
 `ProjectManagedIdentity` is accepted by the Foundry resource provider and SDK
 but is not yet in the published `2025-06-01` Bicep types, so the template
-suppresses BCP036 for those two connections. This has not been validated by a
-live deployment.
+suppresses BCP036 for those two connections. Both connections were accepted in
+the MicroHack validation deployment; trace ingestion remains unverified.
 
 ## Initial provisioning versus retries
 
@@ -277,14 +294,14 @@ indexer/query readiness, and declared keyless resources/models.
 Compilation checks schema/types, not subscription
 policy, live availability, quota or runtime endpoint contents.
 
-**Not observed:** a live MicroHack hook run, cloud deployment/ARM validation,
-initial region exhaustion, actual Entra inference/RBAC propagation, runtime
-project endpoint, live Search/Storage upload, indexing and participant queries,
-trace ingestion through the
-`ProjectManagedIdentity` connection, participant dashboard rendering and retention of participant
-work across a live rerun. These require explicit authorization for an
-organizer-owned disposable environment. Do not equate the local tests or a
-content-pack import with those acceptance checks.
+A MicroHack hook run successfully deployed the shared ARM resources in one
+validation environment. **Not observed:** initial region exhaustion, actual
+Entra inference/RBAC propagation, runtime project endpoint, live Search/Storage
+upload, indexing and participant queries, trace ingestion through the
+`ProjectManagedIdentity` connection, participant dashboard rendering and
+retention of participant work across a live rerun. These require explicit
+authorization for an organizer-owned disposable environment. Do not equate
+the local tests or a content-pack import with those acceptance checks.
 
 ## Primary-source contract
 
