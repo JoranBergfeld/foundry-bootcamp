@@ -3,7 +3,8 @@
 Six one-hour sessions share one participant environment. Each lab is independent
 and has a 40-45-minute follow-along; scene-setting and recap are outside it.
 Shared provisioning of the participant environment is in place (see
-`labautomation/README.md`). Only the lab exercises remain placeholders.
+`labautomation/README.md`). Lab 2 contains an advanced-RAG exercise; the other
+lab exercises remain placeholders.
 
 ## Labs
 
