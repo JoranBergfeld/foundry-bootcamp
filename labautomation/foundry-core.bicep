@@ -182,7 +182,7 @@ resource insights 'Microsoft.Insights/components@2020-02-02' = {
   }
 }
 
-// Matches the portal's "Project managed identity" auth: traces are ingested without a connection string.
+// The resource provider requires this routing metadata even with project-managed identity.
 // The RP/SDK accept ProjectManagedIdentity, but the published 2025-06-01 Bicep types predate it.
 resource tracingConnection 'Microsoft.CognitiveServices/accounts/projects/connections@2025-06-01' = {
   parent: project
@@ -196,6 +196,7 @@ resource tracingConnection 'Microsoft.CognitiveServices/accounts/projects/connec
     metadata: {
       ApiType: 'Azure'
       ResourceId: insights.id
+      ApplicationInsightsConnectionString: insights.properties.ConnectionString
     }
   }
 }

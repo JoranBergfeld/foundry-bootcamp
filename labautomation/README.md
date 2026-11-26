@@ -85,7 +85,8 @@ Entra authentication. Each supplied participant receives Azure AI User
 (`53ca6127-db72-4b80-b1b0-d745d6d5456d`) scoped to the Foundry account. Current
 Microsoft documentation displays this unchanged built-in role as **Foundry
 User**. MicroHack retains ownership of participant control-plane roles.
-No key, password, token or connection string is retrieved or published.
+No service key, password, access token or connection string is included in
+participant-facing deployment outputs.
 
 ## Search, Storage and tracing
 
@@ -96,7 +97,16 @@ No key, password, token or connection string is retrieved or published.
 | Baseline container | `baseline` (private); contains the shared ticket dataset |
 | Log Analytics | `log-<uniqueString>`, PerGB2018, 30-day retention, local auth disabled |
 | Application Insights | `appi-<uniqueString>`, workspace-based, local auth disabled |
-| Project connections | `bootcamp-tracing` (AppInsights) and `bootcamp-search` (CognitiveSearch), both `ProjectManagedIdentity`, no stored credentials |
+| Project connections | `bootcamp-tracing` (AppInsights) and `bootcamp-search` (CognitiveSearch), both `ProjectManagedIdentity`, no stored authentication credentials |
+
+Azure requires the Application Insights connection string as routing metadata
+on `bootcamp-tracing`. ARM retrieves it from the Application Insights resource;
+it is stored in the project connection and can be read by identities with
+access to that connection. It is not included in deployment outputs or
+HackboxCredential. Its instrumentation key is a
+[resource identifier, not a security key](https://learn.microsoft.com/en-us/azure/azure-monitor/app/connection-strings);
+the connection is configured to use the project managed identity for trace
+ingestion, with local authentication disabled.
 
 Role assignments (stable `guid(scope, principal, role)` names, so reruns are
 idempotent):
