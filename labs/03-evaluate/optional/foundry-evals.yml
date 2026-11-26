@@ -1,0 +1,59 @@
+# Optional Lab 03 extension. Copy to .github/workflows/ in your own repository
+# and copy the lab's dataset/ directory to that repository's root.
+# Not validated in the bootcamp environment; see the lab README.
+name: Foundry support evaluation
+on:
+  workflow_dispatch:
+    inputs:
+      dataset:
+        description: Golden benchmark (commit the reviewed nine-row file before selecting v3)
+        type: choice
+        options: [v2, v3]
+        default: v2
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  compare:
+    runs-on: ubuntu-latest
+    environment: bootcamp-evals
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Prepare the action input from the golden JSONL
+        shell: pwsh
+        env:
+          DATASET: ${{ inputs.dataset }}
+          ROUTING: ${{ vars.ROUTING_EVALUATOR }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $counts = @{ v2 = 8; v3 = 9 }
+          if (!$counts.ContainsKey($env:DATASET) -or !$env:ROUTING) { throw 'Select v2/v3 and set ROUTING_EVALUATOR.' }
+          $name = "support-golden-$env:DATASET"
+          $rows = @(Get-Content "dataset/$name.jsonl" | ForEach-Object { ConvertFrom-Json $_ })
+          if ($rows.Count -ne $counts[$env:DATASET] -or @($rows.id | Sort-Object -Unique).Count -ne $rows.Count) { throw 'Unexpected row count or duplicate ID.' }
+          foreach ($row in $rows) {
+            foreach ($field in 'id','query','context','ground_truth') {
+              if ([string]::IsNullOrWhiteSpace($row.$field)) { throw "Missing $field in dataset." }
+            }
+          }
+          @{ name = $name; evaluators = @('builtin.tool_call_success','builtin.groundedness','builtin.similarity',$env:ROUTING); data = $rows } |
+            ConvertTo-Json -Depth 8 | Set-Content (Join-Path $env:RUNNER_TEMP 'support-evals.json') -Encoding utf8NoBOM
+      - name: Sign in to Azure with GitHub OIDC
+        uses: azure/login@v2
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+      - name: Compare the saved agent versions
+        uses: microsoft/ai-agent-evals@22a09a8f9dbc407e3a5429db9635111fb669f463 # v3-beta
+        with:
+          azure-ai-project-endpoint: ${{ vars.FOUNDRY_PROJECT_ENDPOINT }}
+          deployment-name: ${{ vars.JUDGE_DEPLOYMENT }}
+          agent-ids: ${{ vars.BASELINE_AGENT }},${{ vars.CANDIDATE_AGENT }}
+          baseline-agent-id: ${{ vars.BASELINE_AGENT }}
+          data-path: ${{ runner.temp }}/support-evals.json
