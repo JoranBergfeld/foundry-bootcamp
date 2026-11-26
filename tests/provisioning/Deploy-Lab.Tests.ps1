@@ -69,8 +69,6 @@ Describe 'Shared baseline dataset' {
 Describe 'MicroHack Foundry provisioning hook' {
     BeforeEach {
         $script:PreviousOptIn = $env:BOOTCAMP_ORGANIZER_INITIAL_PROVISIONING
-        $script:PreviousExemption = $env:BOOTCAMP_STORAGE_POLICY_EXEMPTION
-        $env:BOOTCAMP_STORAGE_POLICY_EXEMPTION = $null
         $env:BOOTCAMP_ORGANIZER_INITIAL_PROVISIONING = 'true'
         $script:Inputs = @{
             DeploymentType = 'resourcegroup'
@@ -154,7 +152,6 @@ Describe 'MicroHack Foundry provisioning hook' {
 
     AfterEach {
         $env:BOOTCAMP_ORGANIZER_INITIAL_PROVISIONING = $script:PreviousOptIn
-        $env:BOOTCAMP_STORAGE_POLICY_EXEMPTION = $script:PreviousExemption
         Remove-Variable -Name ProvisioningTestDataPlane -Scope Global -ErrorAction SilentlyContinue
     }
 
@@ -424,7 +421,11 @@ Describe 'MicroHack Foundry provisioning hook' {
         $published.Count | Should -Be 0
     }
 
-    It 'uploads every ticket and publishes the name of a queryable keyless baseline index' {
+    It 'uploads every ticket and publishes a queryable keyless baseline index: <Path>' -ForEach @(
+        @{ Path = 'incremental' }
+        @{ Path = 'initial fallback' }
+    ) {
+        if ($Path -eq 'incremental') { $env:BOOTCAMP_ORGANIZER_INITIAL_PROVISIONING = $null }
         $credentials = @(& $script:Hook @script:Inputs)
         $indexName = ($credentials | Where-Object { $_.HackboxCredential.name -eq 'BaselineIndexName' }).HackboxCredential.value
         $indexName | Should -Be 'bootcamp-baseline-v1'
@@ -442,61 +443,7 @@ Describe 'MicroHack Foundry provisioning hook' {
         $indexer.parameters.configuration.parsingMode | Should -Be 'delimitedText'
         $indexer.parameters.configuration.firstLineContainsHeaders | Should -BeTrue
         $indexer.targetIndexName | Should -Be $indexName
-    }
-
-    It 'provisions the full baseline through an approved network exemption: <Path>' -ForEach @(
-        @{ Path = 'incremental' }
-        @{ Path = 'initial fallback' }
-    ) {
-        $config = @{
-            policyAssignmentId = '/providers/Microsoft.Management/managementGroups/event/providers/Microsoft.Authorization/policyAssignments/storage-network'
-            policyDefinitionReferenceIds = @('storageaccountpublicnetworkmodify')
-            expiresOn = [DateTime]::UtcNow.AddDays(2).ToString("yyyy-MM-ddTHH:mm:ss'Z'")
-            description = 'Approved event network waiver; approval reference EVENT-123.'
-        }
-        $env:BOOTCAMP_STORAGE_POLICY_EXEMPTION = $config | ConvertTo-Json -Compress
-        if ($Path -eq 'incremental') { $env:BOOTCAMP_ORGANIZER_INITIAL_PROVISIONING = $null }
-        $global:ProvisioningTestDataPlane.StoragePublicNetworkAccess = 'Disabled'
-        Mock New-AzResourceGroupDeployment {
-            if ($TemplateParameterObject.ContainsKey('storagePolicyExemption')) {
-                $global:ProvisioningTestDataPlane.StoragePublicNetworkAccess = 'Enabled'
-            }
-            @{
-                ProvisioningState = 'Succeeded'
-                Outputs = @{
-                    FoundryProjectEndpoint = @{ Value = 'https://foundry.example/api/projects/bootcamp' }
-                    ChatDeploymentName = @{ Value = 'bootcamp-chat' }
-                    EmbeddingDeploymentName = @{ Value = 'bootcamp-embedding' }
-                    SearchEndpoint = @{ Value = 'https://srch.example.search.windows.net' }
-                    StorageAccountName = @{ Value = 'stexample' }
-                    StorageBaselineContainerName = @{ Value = 'baseline' }
-                }
-            }
-        }
-        Mock Invoke-MhhDeploymentWithRegionFallback {
-            if ($TemplateParameterObject.ContainsKey('storagePolicyExemption')) {
-                $global:ProvisioningTestDataPlane.StoragePublicNetworkAccess = 'Enabled'
-            }
-            @{
-                Success = $true; LocationUsed = 'region-first'
-                Outputs = @{
-                    FoundryProjectEndpoint = 'https://foundry.example/api/projects/bootcamp'
-                    ChatDeploymentName = 'bootcamp-chat'
-                    EmbeddingDeploymentName = 'bootcamp-embedding'
-                    SearchEndpoint = 'https://srch.example.search.windows.net'
-                    StorageAccountName = 'stexample'
-                    StorageBaselineContainerName = 'baseline'
-                }
-            }
-        }
-
-        $credentials = @(& $script:Hook @script:Inputs)
-        $credentials.Count | Should -Be 9
-        ($credentials | Where-Object { $_.HackboxCredential.name -eq 'BaselineIndexName' }).HackboxCredential.value |
-            Should -Be 'bootcamp-baseline-v1'
         $state = $global:ProvisioningTestDataPlane
-        $state.Blobs.Count | Should -Be 10
-        $state.IndexedRows | Should -Be 100000
         $fields = $state.Search.indexes['bootcamp-baseline-v1'].fields
         ($fields.name -join ',') | Should -Be (
             'ticket_id,created_at,customer_id,customer_segment,channel,product_area,issue_type,priority,status,sla_plan,' +
@@ -510,88 +457,31 @@ Describe 'MicroHack Foundry provisioning hook' {
         $query.search | Should -Be 'password'
         $query.filter | Should -Be "ticket_id eq 'TCKT_000001'"
         $query.searchFields | Should -Be 'initial_message'
-        if ($Path -eq 'incremental') {
-            Should -Invoke New-AzResourceGroupDeployment -Times 1 -Exactly -ParameterFilter {
-                $TemplateParameterObject.storagePolicyExemption.policyAssignmentId -eq $config.policyAssignmentId -and
-                $TemplateParameterObject.storagePolicyExemption.expiresOn -eq $config.expiresOn
-            }
-        } else {
-            Should -Invoke Invoke-MhhDeploymentWithRegionFallback -Times 1 -Exactly -ParameterFilter {
-                $TemplateParameterObject.storagePolicyExemption.policyAssignmentId -eq $config.policyAssignmentId -and
-                $TemplateParameterObject.storagePolicyExemption.expiresOn -eq $config.expiresOn
-            }
+    }
+
+    It 'preserves existing Storage tags while replacing the security control tag' {
+        Mock Get-AzResource {
+            @(
+                @{ ResourceType = 'Microsoft.Storage/storageAccounts'; Name = 'stexample'; Tags = @{ owner = 'team'; securitycontrol = 'Enforce' } }
+                @{ ResourceType = 'Microsoft.Storage/storageAccounts'; Name = 'stuntagged'; Tags = $null }
+            )
+        }
+        & $script:Hook @script:Inputs | Out-Null
+        Should -Invoke New-AzResourceGroupDeployment -Times 1 -Exactly -ParameterFilter {
+            $tags = $TemplateParameterObject.existingStorageAccountTags
+            $tags['stexample']['owner'] -eq 'team' -and
+            -not $tags['stexample'].ContainsKey('securitycontrol') -and
+            $tags['stuntagged'].Count -eq 0
         }
     }
 
-    It 'rejects invalid network exemption configuration before contacting Azure: <Invalid>' -ForEach @(
-        @{ Invalid = 'invalid JSON' }
-        @{ Invalid = 'missing references' }
-        @{ Invalid = 'blank reference' }
-        @{ Invalid = 'scalar reference' }
-        @{ Invalid = 'expired' }
-        @{ Invalid = 'non-UTC expiry' }
-        @{ Invalid = 'missing approval description' }
-        @{ Invalid = 'invalid assignment ID' }
-    ) {
-        $config = @{
-            policyAssignmentId = '/subscriptions/00000000-0000-0000-0000-000000000001/providers/Microsoft.Authorization/policyAssignments/network'
-            policyDefinitionReferenceIds = @('storageaccountpublicnetworkmodify')
-            expiresOn = [DateTime]::UtcNow.AddDays(2).ToString("yyyy-MM-ddTHH:mm:ss'Z'")
-            description = 'Approved event waiver EVENT-123.'
-        }
-        switch ($Invalid) {
-            'missing references' { $config.policyDefinitionReferenceIds = @() }
-            'blank reference' { $config.policyDefinitionReferenceIds = @('') }
-            'scalar reference' { $config.policyDefinitionReferenceIds = 'storageaccountpublicnetworkmodify' }
-            'expired' { $config.expiresOn = '2020-01-01T00:00:00Z' }
-            'non-UTC expiry' { $config.expiresOn = '2099-01-01T00:00:00+01:00' }
-            'missing approval description' { $config.Remove('description') }
-            'invalid assignment ID' { $config.policyAssignmentId = 'network' }
-        }
-        $env:BOOTCAMP_STORAGE_POLICY_EXEMPTION = if ($Invalid -eq 'invalid JSON') { '{invalid' } else {
-            $config | ConvertTo-Json -Compress
-        }
-        $published = [System.Collections.Generic.List[object]]::new()
-        { & $script:Hook @script:Inputs | ForEach-Object { $published.Add($_) } } |
-            Should -Throw '*BOOTCAMP_STORAGE_POLICY_EXEMPTION*'
-        $published.Count | Should -Be 0
-        Should -Invoke Get-AzContext -Times 0
-        Should -Invoke New-AzResourceGroupDeployment -Times 0
-        Should -Invoke Invoke-MhhDeploymentWithRegionFallback -Times 0
-    }
-
-    It 'does not waive a network policy implicitly or publish a blocked baseline' {
+    It 'does not publish a baseline when policy still blocks Storage network access' {
         $global:ProvisioningTestDataPlane.StoragePublicNetworkAccess = 'Disabled'
         $published = [System.Collections.Generic.List[object]]::new()
         { & $script:Hook @script:Inputs | ForEach-Object { $published.Add($_) } } |
             Should -Throw '*Storage public network access is disabled by policy*'
         $published.Count | Should -Be 0
         $global:ProvisioningTestDataPlane.Search.indexes.Count | Should -Be 0
-        Should -Invoke Invoke-MhhDeploymentWithRegionFallback -Times 1 -ParameterFilter {
-            -not $TemplateParameterObject.ContainsKey('storagePolicyExemption')
-        }
-    }
-
-    It 'deploys a time-limited Storage-only exemption before the account without weakening authentication' {
-        $arm = (Get-CompiledCore).Arm
-        $exemptions = @($arm.resources | Where-Object type -eq 'Microsoft.Authorization/policyExemptions')
-        $exemptions.Count | Should -Be 1
-        $exemption = $exemptions[0]
-        $exemption.condition | Should -Match 'storagePolicyExemption'
-        $exemption.properties.policyAssignmentId | Should -Match 'storagePolicyExemption.*policyAssignmentId'
-        $exemption.properties.policyDefinitionReferenceIds | Should -Match 'storagePolicyExemption.*policyDefinitionReferenceIds'
-        $exemption.properties.expiresOn | Should -Match 'storagePolicyExemption.*expiresOn'
-        $exemption.properties.description | Should -Match 'storagePolicyExemption.*description'
-        $exemption.properties.exemptionCategory | Should -Be 'Waiver'
-        $exemption.properties.assignmentScopeValidation | Should -Be 'Default'
-        $selector = $exemption.properties.resourceSelectors[0].selectors[0]
-        $selector.kind | Should -Be 'resourceType'
-        $selector.in | Should -Be @('Microsoft.Storage/storageAccounts')
-        $storage = @($arm.resources | Where-Object type -eq 'Microsoft.Storage/storageAccounts')[0]
-        ($storage.dependsOn -join ',') | Should -Match 'Microsoft.Authorization/policyExemptions'
-        $storage.properties.publicNetworkAccess | Should -Be 'Enabled'
-        $storage.properties.allowSharedKeyAccess | Should -BeFalse
-        $storage.properties.allowBlobPublicAccess | Should -BeFalse
     }
 
     It 'refuses an unexpected blob in the reserved dataset prefix without deleting it' {
@@ -807,9 +697,14 @@ Describe 'MicroHack Foundry provisioning hook' {
         $search[0].identity.type | Should -Be 'SystemAssigned'
         $storage = @($arm.resources | Where-Object type -eq 'Microsoft.Storage/storageAccounts')
         $storage.Count | Should -Be 1
+        $storage[0].tags | Should -Match 'existingStorageAccountTags'
+        $storage[0].tags | Should -Match "'SecurityControl', 'Ignore'"
+        $storage[0].properties.publicNetworkAccess | Should -Be 'Enabled'
+        $storage[0].properties.networkAcls.defaultAction | Should -Be 'Allow'
         $storage[0].properties.allowSharedKeyAccess | Should -BeFalse
         $storage[0].properties.allowBlobPublicAccess | Should -BeFalse
         $storage[0].properties.defaultToOAuthAuthentication | Should -BeTrue
+        @($arm.resources | Where-Object type -eq 'Microsoft.Authorization/policyExemptions').Count | Should -Be 0
         $container = @($arm.resources | Where-Object type -eq 'Microsoft.Storage/storageAccounts/blobServices/containers')
         $container.Count | Should -Be 1
         $container[0].properties.publicAccess | Should -Be 'None'
