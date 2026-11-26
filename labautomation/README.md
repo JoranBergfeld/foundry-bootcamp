@@ -76,8 +76,10 @@ as GA through 2027-09-21 and the embedding model as GA through 2028-02-09.
 Both deployments use `NoAutoUpgrade` to avoid unexpected version changes;
 organizers must review lifecycle dates and update/revalidate before later
 events. Deployments are serialized to avoid concurrent account model updates.
-Changing declared model names, versions, deployment names or capacity is an
-organizer-reviewed infrastructure change, not between-lab recovery.
+The project is deployed before the models to avoid concurrent account
+operations. Changing declared model names, versions, deployment names or
+capacity is an organizer-reviewed infrastructure change, not between-lab
+recovery.
 
 The account and project have system-assigned managed identities. Account local
 authentication is disabled; public endpoints remain enabled for participant

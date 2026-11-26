@@ -779,4 +779,13 @@ Describe 'MicroHack Foundry provisioning hook' {
         $arm.outputs.ChatDeploymentName.value | Should -Be 'bootcamp-chat'
         $arm.outputs.EmbeddingDeploymentName.value | Should -Be 'bootcamp-embedding'
     }
+
+    It 'serializes Foundry project and model updates on the shared account' {
+        $arm = (Get-CompiledCore).Arm
+        $models = @($arm.resources | Where-Object type -eq 'Microsoft.CognitiveServices/accounts/deployments')
+        $chat = $models | Where-Object { $_.properties.model.name -eq 'gpt-5.4-mini' }
+        $embedding = $models | Where-Object { $_.properties.model.name -eq 'text-embedding-3-small' }
+        $chat.dependsOn | Should -Contain "[resourceId('Microsoft.CognitiveServices/accounts/projects', variables('accountName'), variables('projectName'))]"
+        $embedding.dependsOn | Should -Contain "[resourceId('Microsoft.CognitiveServices/accounts/deployments', variables('accountName'), 'bootcamp-chat')]"
+    }
 }

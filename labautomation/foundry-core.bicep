@@ -74,6 +74,10 @@ resource chat 'Microsoft.CognitiveServices/accounts/deployments@2025-06-01' = {
     }
     versionUpgradeOption: 'NoAutoUpgrade'
   }
+  // The provider can reject concurrent project and model updates on the parent account.
+  dependsOn: [
+    project
+  ]
 }
 
 resource embedding 'Microsoft.CognitiveServices/accounts/deployments@2025-06-01' = {
