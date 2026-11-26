@@ -1,0 +1,4 @@
+Weekend support policy (training extract from KB-SUP-014)
+Standard plan: routine tickets are answered Monday to Friday during business hours. Phone support is not included.
+All plans: urgent tickets reach the on-call team immediately, 24/7, including weekends. Suspected account compromise and a whole organization being unable to sign in are urgent.
+Submit a ticket using Help > Contact support. Dashboard how-to questions and feature requests are routine, not urgent.

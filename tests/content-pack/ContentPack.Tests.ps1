@@ -47,6 +47,11 @@ BeforeAll {
 "@
         }
         Write-PackFile $root 'labs/02-build-advanced/lab.ps1' '# Participant script'
+        foreach ($file in 'lab.ps1', 'SOURCE-LICENSE.txt', 'dataset/support-golden-v2.jsonl', 'knowledge/support-policy.txt',
+            'knowledge/KB-BIL-003_invoice-doesnt-match-plan-discrepancies-and-refunds.md',
+            'knowledge/KB-DEX-005_exporting-data-formats-limits-and-scheduling.md', 'optional/foundry-evals.yml') {
+            Write-PackFile $root "labs/03-evaluate/$file" 'Lab asset'
+        }
         $root
     }
 
@@ -147,6 +152,13 @@ Run ``az login`` first.
         } | ConvertTo-Json -Depth 5)
 
         Invoke-Check $root | Should -Contain 'Lab 02: Student ZIP is missing labs/02-build-advanced/lab.ps1'
+    }
+
+    It 'reports a missing Lab 03 evaluation asset in the Student ZIP' {
+        $root = New-ValidPack
+        Remove-Item (Join-Path $root 'labs/03-evaluate/dataset/support-golden-v2.jsonl')
+
+        Invoke-Check $root | Should -Contain 'Lab 03: Student ZIP is missing labs/03-evaluate/dataset/support-golden-v2.jsonl'
     }
 
     It 'reports a missing solution pointer page' {

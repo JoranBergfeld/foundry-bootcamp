@@ -79,8 +79,22 @@ foreach ($lab in $labs) {
     }
 }
 
-$lab02Script = 'labs/02-build-advanced/lab.ps1'
-if ($lab02Script -notin $studentZip) { "Lab 02: Student ZIP is missing $lab02Script" }
+$requiredParticipantFiles = [ordered]@{
+    '02' = @('labs/02-build-advanced/lab.ps1')
+    '03' = @(
+        'labs/03-evaluate/lab.ps1'
+        'labs/03-evaluate/SOURCE-LICENSE.txt'
+        'labs/03-evaluate/dataset/support-golden-v2.jsonl'
+        'labs/03-evaluate/knowledge/support-policy.txt'
+        'labs/03-evaluate/knowledge/KB-BIL-003_invoice-doesnt-match-plan-discrepancies-and-refunds.md'
+        'labs/03-evaluate/knowledge/KB-DEX-005_exporting-data-formats-limits-and-scheduling.md'
+        'labs/03-evaluate/optional/foundry-evals.yml'
+    )
+}
+foreach ($n in $requiredParticipantFiles.Keys) {
+    $requiredParticipantFiles[$n] | Where-Object { $_ -notin $studentZip } |
+        ForEach-Object { "Lab ${n}: Student ZIP is missing $_" }
+}
 
 $studentZip | ForEach-Object { ($_ -split '/')[0] } | Sort-Object -Unique |
     Where-Object { $_ -notin $participantEntries } |
