@@ -60,8 +60,9 @@ The script authenticates through your Azure CLI sign-in. It adds
 `lab02-<suffix>-semantic` to the existing index, and creates
 `lab02-<suffix>-source` and `lab02-<suffix>-kb`. It uses conditional writes:
 an index changed concurrently causes an explicit failure, and existing sources
-or bases are never overwritten. A rerun reuses compatible objects; a conflicting
-name stops the script. Pick a new suffix rather than deleting existing work.
+or bases are never overwritten. A rerun reuses compatible objects; sources with
+restricted search fields or other conflicting settings stop the script. Pick a
+new suffix rather than deleting existing work.
 
 In the Search service, inspect the index's semantic configuration and the
 knowledge source's index and fields. The knowledge base references that source.

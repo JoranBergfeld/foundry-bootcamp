@@ -91,9 +91,12 @@ if ($Action -eq 'Setup') {
         $null = Invoke-SearchRequest Put $sourcePath $source @{ 'If-None-Match' = '*' }
     } else {
         $actualSourceFields = @($source.searchIndexParameters.sourceDataFields | ForEach-Object { $_.name })
+        $searchFields = $source.searchIndexParameters.searchFields
         if ($source.kind -ne 'searchIndex' -or $source.searchIndexParameters.searchIndexName -ne $IndexName -or
             $source.searchIndexParameters.semanticConfigurationName -ne $semanticName -or
             $source.searchIndexParameters.baseFilter -or
+            ($null -ne $searchFields -and @($searchFields).Count -gt 0 -and
+                (@($searchFields).Count -ne 1 -or $searchFields[0].name -cne '*')) -or
             ($actualSourceFields -join ',') -cne 'ticket_id,initial_message,agent_first_reply,resolution_summary') {
             throw "Knowledge source '$sourceName' differs; choose another suffix."
         }

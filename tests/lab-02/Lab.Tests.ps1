@@ -110,6 +110,32 @@ Describe 'Lab 02 participant path' {
         @($global:lab02Test.requests | Where-Object method -eq 'Put').Count | Should -Be $writes
     }
 
+    It 'does not reuse or overwrite a source with restricted search fields' {
+        & $script:Lab Setup 'https://example.search.windows.net' baseline abc
+        $global:lab02Test.source.searchIndexParameters.searchFields = @(@{ name = 'initial_message' })
+        $writes = @($global:lab02Test.requests | Where-Object method -eq 'Put').Count
+        { & $script:Lab Setup 'https://example.search.windows.net' baseline abc } | Should -Throw '*differs*'
+        @($global:lab02Test.requests | Where-Object method -eq 'Put').Count | Should -Be $writes
+        $global:lab02Test.source.searchIndexParameters.searchFields[0].name | Should -Be 'initial_message'
+        $global:lab02Test.source.searchIndexParameters.searchFields = @(
+            @{ name = 'initial_message' }, @{ name = 'resolution_summary' }
+        )
+        { & $script:Lab Setup 'https://example.search.windows.net' baseline abc } | Should -Throw '*differs*'
+        @($global:lab02Test.requests | Where-Object method -eq 'Put').Count | Should -Be $writes
+    }
+
+    It 'reuses a source with <Description> search fields' -ForEach @(
+        @{ Description = 'null'; Value = $null }
+        @{ Description = 'empty'; Value = @() }
+        @{ Description = 'wildcard'; Value = @(@{ name = '*' }) }
+    ) {
+        & $script:Lab Setup 'https://example.search.windows.net' baseline abc
+        $global:lab02Test.source.searchIndexParameters.searchFields = $Value
+        $writes = @($global:lab02Test.requests | Where-Object method -eq 'Put').Count
+        & $script:Lab Setup 'https://example.search.windows.net' baseline abc | Should -Match '^Ready:'
+        @($global:lab02Test.requests | Where-Object method -eq 'Put').Count | Should -Be $writes
+    }
+
     It 'requests extractive retrieval with evidence and references' {
         $result = & $script:Lab Retrieve 'https://example.search.windows.net' baseline abc -Question 'How was login fixed?' | ConvertFrom-Json
         $request = ($global:lab02Test.requests | Where-Object method -eq 'Post').body | ConvertFrom-Json
