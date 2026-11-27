@@ -128,6 +128,10 @@ Describe 'MicroHack Foundry provisioning hook' {
                     FoundryProjectEndpoint = @{ Value = 'https://foundry.example/api/projects/bootcamp' }
                     ChatDeploymentName = @{ Value = 'bootcamp-chat' }
                     EmbeddingDeploymentName = @{ Value = 'bootcamp-embedding' }
+                    SecondaryFoundryProjectEndpoint = @{ Value = 'https://foundry-alt.example/api/projects/bootcamp' }
+                    SecondaryChatDeploymentName = @{ Value = 'bootcamp-chat-nano' }
+                    McpServerUrl = @{ Value = 'https://mcp.example/mcp' }
+                    McpConnectionName = @{ Value = 'bootcamp-date-time' }
                     SearchEndpoint = @{ Value = 'https://srch.example.search.windows.net' }
                     StorageAccountName = @{ Value = 'stexample' }
                     StorageBaselineContainerName = @{ Value = 'baseline' }
@@ -142,6 +146,10 @@ Describe 'MicroHack Foundry provisioning hook' {
                     FoundryProjectEndpoint = 'https://foundry.example/api/projects/bootcamp'
                     ChatDeploymentName = 'bootcamp-chat'
                     EmbeddingDeploymentName = 'bootcamp-embedding'
+                    SecondaryFoundryProjectEndpoint = 'https://foundry-alt.example/api/projects/bootcamp'
+                    SecondaryChatDeploymentName = 'bootcamp-chat-nano'
+                    McpServerUrl = 'https://mcp.example/mcp'
+                    McpConnectionName = 'bootcamp-date-time'
                     SearchEndpoint = 'https://srch.example.search.windows.net'
                     StorageAccountName = 'stexample'
                     StorageBaselineContainerName = 'baseline'
@@ -166,9 +174,10 @@ Describe 'MicroHack Foundry provisioning hook' {
             ($PreferredLocations -join ',') -eq 'region-first,region-second' -and
             $ResourceGroupName -eq 'participant' -and
             $RgOwnerEntraObjectIds[0] -eq '00000000-0000-0000-0000-000000000002' -and
-            $TemplateParameterObject.participantObjectIds[0] -eq '00000000-0000-0000-0000-000000000002'
+            $TemplateParameterObject.participantObjectIds[0] -eq '00000000-0000-0000-0000-000000000002' -and
+            $TemplateParameterObject.existingFoundryAccountNames.Count -eq 0
         }
-        $credentials.Count | Should -Be 9
+        $credentials.Count | Should -Be 13
         $values = @{}
         foreach ($credential in $credentials) {
             $credential | Should -BeOfType [hashtable]
@@ -179,6 +188,10 @@ Describe 'MicroHack Foundry provisioning hook' {
         $values.FoundryProjectEndpoint | Should -Be 'https://foundry.example/api/projects/bootcamp'
         $values.ChatDeploymentName | Should -Be 'bootcamp-chat'
         $values.EmbeddingDeploymentName | Should -Be 'bootcamp-embedding'
+        $values.SecondaryFoundryProjectEndpoint | Should -Be 'https://foundry-alt.example/api/projects/bootcamp'
+        $values.SecondaryChatDeploymentName | Should -Be 'bootcamp-chat-nano'
+        $values.McpServerUrl | Should -Be 'https://mcp.example/mcp'
+        $values.McpConnectionName | Should -Be 'bootcamp-date-time'
         $values.SearchEndpoint | Should -Be 'https://srch.example.search.windows.net'
         $values.StorageAccountName | Should -Be 'stexample'
         $values.StorageBaselineContainerName | Should -Be 'baseline'
@@ -186,15 +199,30 @@ Describe 'MicroHack Foundry provisioning hook' {
     }
 
     It 'never calls destructive fallback on a populated RG even with organizer opt-in' {
-        Mock Get-AzResource { @{ ResourceType = 'Microsoft.CognitiveServices/accounts'; Location = 'region-first' } }
+        Mock Get-AzResource {
+            @(
+                @{ ResourceType = 'Microsoft.CognitiveServices/accounts'; Name = 'foundry-abcdefghijklm' }
+                @{ ResourceType = 'Microsoft.CognitiveServices/accounts'; Name = 'foundry-alt-abcdefghijklm' }
+            )
+        }
         $credentials = @(& $script:Hook @script:Inputs)
         Should -Invoke Invoke-MhhDeploymentWithRegionFallback -Times 0
         Should -Invoke New-AzResourceGroupDeployment -Times 1 -Exactly -ParameterFilter {
             $Mode -eq 'Incremental' -and $ResourceGroupName -eq 'participant' -and
-            $TemplateParameterObject.location -eq 'region-first'
+            $TemplateParameterObject.location -eq 'region-first' -and
+            $TemplateParameterObject.existingFoundryAccountNames.Count -eq 2 -and
+            'foundry-abcdefghijklm' -in $TemplateParameterObject.existingFoundryAccountNames -and
+            'foundry-alt-abcdefghijklm' -in $TemplateParameterObject.existingFoundryAccountNames
         }
         ($credentials | Where-Object { $_.HackboxCredential.name -eq 'Region' }).HackboxCredential.value |
             Should -Be 'region-first'
+    }
+
+    It 'fails before deployment when a Foundry account inventory entry has no name' {
+        Mock Get-AzResource { @{ ResourceType = 'Microsoft.CognitiveServices/accounts'; Name = '' } }
+        { & $script:Hook @script:Inputs } | Should -Throw '*Foundry account inventory*without a name*'
+        Should -Invoke New-AzResourceGroupDeployment -Times 0
+        Should -Invoke Invoke-MhhDeploymentWithRegionFallback -Times 0
     }
 
     It 'keeps an existing RG in its own region when that region is a supplied preference' {
@@ -642,6 +670,34 @@ Describe 'MicroHack Foundry provisioning hook' {
         $published.Count | Should -Be 0
     }
 
+    It 'publishes nothing when the new required <Output> is missing' -ForEach @(
+        @{ Output = 'SecondaryFoundryProjectEndpoint' }
+        @{ Output = 'SecondaryChatDeploymentName' }
+        @{ Output = 'McpServerUrl' }
+        @{ Output = 'McpConnectionName' }
+    ) {
+        Mock Invoke-MhhDeploymentWithRegionFallback {
+            $outputs = @{
+                FoundryProjectEndpoint = 'https://foundry.example/api/projects/bootcamp'
+                ChatDeploymentName = 'bootcamp-chat'
+                EmbeddingDeploymentName = 'bootcamp-embedding'
+                SecondaryFoundryProjectEndpoint = 'https://foundry-alt.example/api/projects/bootcamp'
+                SecondaryChatDeploymentName = 'bootcamp-chat-nano'
+                McpServerUrl = 'https://mcp.example/mcp'
+                McpConnectionName = 'bootcamp-date-time'
+                SearchEndpoint = 'https://srch.example.search.windows.net'
+                StorageAccountName = 'stexample'
+                StorageBaselineContainerName = 'baseline'
+            }
+            $outputs.Remove($Output)
+            @{ Success = $true; LocationUsed = 'region-first'; Outputs = $outputs }
+        }
+        $published = [System.Collections.Generic.List[object]]::new()
+        { & $script:Hook @script:Inputs | ForEach-Object { $published.Add($_) } } |
+            Should -Throw "*missing required output '$Output'*"
+        $published.Count | Should -Be 0
+    }
+
     It 'publishes nothing if the deployment omits the Search or Storage values' {
         Mock Invoke-MhhDeploymentWithRegionFallback {
             @{
@@ -670,21 +726,49 @@ Describe 'MicroHack Foundry provisioning hook' {
         $LASTEXITCODE | Should -Be 0
         $arm = Get-Content $compiled -Raw | ConvertFrom-Json -AsHashtable
         $account = @($arm.resources | Where-Object type -eq 'Microsoft.CognitiveServices/accounts')
-        $account.Count | Should -Be 1
-        $account[0].kind | Should -Be 'AIServices'
-        $account[0].properties.allowProjectManagement | Should -BeTrue
-        $account[0].properties.disableLocalAuth | Should -BeTrue
-        $account[0].identity.type | Should -Be 'SystemAssigned'
+        $account.Count | Should -Be 2
+        foreach ($item in $account) {
+            $item.kind | Should -Be 'AIServices'
+            $item.properties.allowProjectManagement | Should -BeTrue
+            $item.properties.disableLocalAuth | Should -BeTrue
+            $item.identity.type | Should -Be 'SystemAssigned'
+        }
+        ($account.name | Select-Object -Unique).Count | Should -Be 2
         $project = @($arm.resources | Where-Object type -eq 'Microsoft.CognitiveServices/accounts/projects')
-        $project.Count | Should -Be 1
-        $project[0].identity.type | Should -Be 'SystemAssigned'
+        $project.Count | Should -Be 2
+        foreach ($item in $project) { $item.identity.type | Should -Be 'SystemAssigned' }
+        @($project | Where-Object { $_.properties.displayName -eq 'Sir Prompts-a-Lot' }).Count | Should -Be 1
+        @($project | Where-Object { $_.properties.displayName -eq 'Count Tokenstein' }).Count | Should -Be 1
         $grant = @(Get-RoleGrants $arm | Where-Object Role -Match '53ca6127-db72-4b80-b1b0-d745d6d5456d')
-        $grant.Count | Should -Be 1
-        $grant[0].Principal | Should -Match 'participantObjectIds'
-        $grant[0].PrincipalType | Should -Be 'User'
-        $grant[0].Scope | Should -Match 'Microsoft.CognitiveServices/accounts'
+        $grant.Count | Should -Be 2
+        foreach ($item in $grant) {
+            $item.Principal | Should -Match 'participantObjectIds'
+            $item.PrincipalType | Should -Be 'User'
+            $item.Scope | Should -Match 'Microsoft.CognitiveServices/accounts'
+        }
+        ($grant.Scope | Select-Object -Unique).Count | Should -Be 2
         $arm.outputs.FoundryProjectEndpoint.type | Should -Be 'string'
+        $arm.outputs.SecondaryFoundryProjectEndpoint.value | Should -Match 'secondaryAccountName'
         $arm.parameters.location.defaultValue | Should -Be '[resourceGroup().location]'
+    }
+
+    It 'selects distinctive names for new accounts while retaining legacy names and rejecting ambiguity' {
+        $arm = (Get-CompiledCore).Arm
+        $arm.parameters.existingFoundryAccountNames.Keys | Should -Not -Contain 'defaultValue'
+        $arm.variables.existingFoundryNames | Should -Match "toLower\(lambdaVariables\('name'\)\)"
+        foreach ($choice in @(
+            @{ Variable = 'accountName'; Legacy = 'legacyAccountName'; LegacyPrefix = 'foundry'; Named = 'namedAccountName'; Prefix = 'foundry-sir-prompts-a-lot'; Label = 'primary' }
+            @{ Variable = 'secondaryAccountName'; Legacy = 'legacySecondaryAccountName'; LegacyPrefix = 'foundry-alt'; Named = 'namedSecondaryAccountName'; Prefix = 'foundry-count-tokenstein'; Label = 'secondary' }
+        )) {
+            $arm.variables[$choice.Legacy] | Should -Match "format\('$($choice.LegacyPrefix)-\{0\}', variables\('suffix'\)\)"
+            $arm.variables[$choice.Named] | Should -Match "format\('$($choice.Prefix)-\{0\}', variables\('suffix'\)\)"
+            $expression = $arm.variables[$choice.Variable]
+            $legacy = [regex]::Escape("variables('$($choice.Legacy)')")
+            $named = [regex]::Escape("variables('$($choice.Named)')")
+            $existing = [regex]::Escape("variables('existingFoundryNames')")
+            $expression | Should -Match "if\(and\(contains\($existing, $legacy\), contains\($existing, $named\)\), fail\('Both $($choice.Label)"
+            $expression | Should -Match "if\(contains\($existing, $legacy\), $legacy, $named\)"
+        }
     }
 
     It 'adds keyless AI Search and Storage with a reusable baseline container' {
@@ -758,7 +842,7 @@ Describe 'MicroHack Foundry provisioning hook' {
             $grant[0].Principal | Should -Match 'participantObjectIds'
             $grant[0].Scope | Should -Match $expected.Scope
         }
-        $grants.Count | Should -Be 4
+        $grants.Count | Should -Be 5
     }
 
     It 'grants the authenticated provisioner the scoped access needed to load and verify the baseline' {
@@ -811,7 +895,7 @@ Describe 'MicroHack Foundry provisioning hook' {
         $LASTEXITCODE | Should -Be 0
         $arm = Get-Content $compiled -Raw | ConvertFrom-Json -AsHashtable
         $models = @($arm.resources | Where-Object type -eq 'Microsoft.CognitiveServices/accounts/deployments')
-        $models.Count | Should -Be 2
+        $models.Count | Should -Be 3
         $chat = $models | Where-Object { $_.properties.model.name -eq 'gpt-5.4-mini' }
         $chat.properties.model.version | Should -Be '2026-03-17'
         $chat.sku.name | Should -Be 'GlobalStandard'
@@ -820,6 +904,12 @@ Describe 'MicroHack Foundry provisioning hook' {
         $embedding.properties.model.version | Should -Be '1'
         $embedding.sku.name | Should -Be 'GlobalStandard'
         $embedding.sku.capacity | Should -Be 10
+        $nano = $models | Where-Object { $_.properties.model.name -eq 'gpt-5.4-nano' }
+        $nano.properties.model.version | Should -Be '2026-03-17'
+        $nano.name | Should -Match 'secondaryAccountName'
+        $nano.sku.name | Should -Be 'GlobalStandard'
+        $nano.sku.capacity | Should -Be 10
+        $arm.outputs.SecondaryChatDeploymentName.value | Should -Be 'bootcamp-chat-nano'
         foreach ($model in $models) {
             $model.properties.model.format | Should -Be 'OpenAI'
             $model.properties.versionUpgradeOption | Should -Be 'NoAutoUpgrade'
@@ -835,5 +925,42 @@ Describe 'MicroHack Foundry provisioning hook' {
         $embedding = $models | Where-Object { $_.properties.model.name -eq 'text-embedding-3-small' }
         $chat.dependsOn | Should -Contain "[resourceId('Microsoft.CognitiveServices/accounts/projects', variables('accountName'), variables('projectName'))]"
         $embedding.dependsOn | Should -Contain "[resourceId('Microsoft.CognitiveServices/accounts/deployments', variables('accountName'), 'bootcamp-chat')]"
+        $nano = $models | Where-Object { $_.properties.model.name -eq 'gpt-5.4-nano' }
+        $nano.dependsOn | Should -Contain "[resourceId('Microsoft.CognitiveServices/accounts/projects', variables('secondaryAccountName'), variables('projectName'))]"
+    }
+
+    It 'hosts one scale-to-zero HTTPS MCP service and exposes it only in the primary Foundry Tools' {
+        $arm = (Get-CompiledCore).Arm
+        $apps = @($arm.resources | Where-Object type -eq 'Microsoft.App/containerApps')
+        $apps.Count | Should -Be 1
+        $app = $apps[0]
+        $app.properties.configuration.ingress.external | Should -BeTrue
+        $app.properties.configuration.ingress.allowInsecure | Should -BeFalse
+        $app.properties.configuration.ingress.targetPort | Should -Be 8000
+        $app.properties.template.scale.minReplicas | Should -Be 0
+        $app.properties.template.scale.maxReplicas | Should -Be 1
+        $container = $app.properties.template.containers[0]
+        $container.resources.cpu | Should -Be "[json('0.25')]"
+        $container.resources.memory | Should -Be '0.5Gi'
+        @($container.probes | Where-Object { $_.httpGet.path -eq '/healthz' }).Count | Should -Be 3
+        $container.args[0] | Should -Match 'set -e'
+        ($arm.variables.Values -join "`n") | Should -Match 'mcp==1\.26\.0'
+        $connection = @($arm.resources | Where-Object {
+            $_.type -eq 'Microsoft.CognitiveServices/accounts/projects/connections' -and
+            $_.properties.category -eq 'RemoteTool'
+        })
+        $connection.Count | Should -Be 1
+        $connection[0].name | Should -Match "variables\('accountName'\)"
+        $connection[0].name | Should -Not -Match 'secondaryAccountName'
+        $connection[0].properties.authType | Should -Be 'None'
+        $connection[0].properties.metadata.type | Should -Be 'generic_mcp'
+        $connection[0].properties.target | Should -Match 'https://\{0\}/mcp'
+        $connection[0].properties.target | Should -Match '\.configuration\.ingress\.fqdn'
+        $connection[0].properties.Keys | Should -Not -Contain 'credentials'
+        $arm.outputs.McpConnectionName.value | Should -Be 'bootcamp-date-time'
+        $arm.outputs.McpServerUrl.value | Should -Match 'accounts/projects/connections.*bootcamp-date-time.*\.target'
+        $environment = @($arm.resources | Where-Object type -eq 'Microsoft.App/managedEnvironments')
+        $environment.Count | Should -Be 1
+        $environment[0].properties.appLogsConfiguration.destination | Should -Be 'azure-monitor'
     }
 }

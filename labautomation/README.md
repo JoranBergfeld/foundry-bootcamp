@@ -5,7 +5,8 @@ by all six labs. It is not a participant setup/reset script. It retains the
 platform's five parameters: `DeploymentType`, `SubscriptionId`,
 `ResourceGroupName`, `PreferredLocation`, and `AllowedEntraUserIds`.
 There is no per-lab provisioning entry point or shared subscription-level
-Foundry account. Each participant environment also receives AI Search, Storage
+Foundry account. Each participant environment receives two independent Foundry
+accounts/projects with deployed models, plus AI Search, Storage
 and Application Insights tracing (#16), plus the pre-indexed baseline dataset
 (#17).
 
@@ -20,7 +21,8 @@ and Application Insights tracing (#16), plus the pre-indexed baseline dataset
   tokens for Storage and Search. The template grants this principal the
   resource-scoped data-plane roles required below.
 - Register `Microsoft.CognitiveServices`, `Microsoft.Search`,
-  `Microsoft.Storage`, `Microsoft.OperationalInsights` and `Microsoft.Insights`
+  `Microsoft.Storage`, `Microsoft.OperationalInsights`, `Microsoft.Insights`
+  and `Microsoft.App`
   for each event subscription before fan-out. Check the AI Search Basic service
   limit per subscription/region for N participants. Provide Az.Accounts, Az.Resources (including
   `New-AzResourceGroup` and `New-AzRoleAssignment`), an installed Bicep compiler and the
@@ -33,7 +35,7 @@ and Application Insights tracing (#16), plus the pre-indexed baseline dataset
   input is accepted; empty/whitespace input fails before any Azure operation.
   The repository deliberately supplies no default region, including in
   `lab-defaults.json`.
-- Validate access, model availability, deployment type and quota for **both**
+- Validate access, model availability, deployment type and quota for **all three**
   models in the actual event subscriptions and preferred regions before
   participant allocation. For each region, organizer read-only preflight can
   use `az cognitiveservices model list --location <region> --subscription <id>`
@@ -64,21 +66,41 @@ The RG-scoped `foundry-core.bicep` declares these choices, using the stable
 
 | Resource | Choice |
 |---|---|
-| Foundry account | `AIServices`, S0, stable `foundry-<RG-derived uniqueString>` name |
-| Project | `bootcamp`, one non-hub project, retained across all six labs |
+| Primary Foundry account | **Sir Prompts-a-Lot**: `AIServices`, S0, `foundry-sir-prompts-a-lot-<RG-derived uniqueString>` |
+| Secondary Foundry account | **Count Tokenstein**: `AIServices`, S0, `foundry-count-tokenstein-<RG-derived uniqueString>` |
+| Projects | `bootcamp`, one non-hub project per account, with matching display names; original lab project/endpoints retained |
 | Chat | Deployment `bootcamp-chat`; OpenAI `gpt-5.4-mini`, version `2026-03-17`; GlobalStandard; capacity **10** |
 | Embedding | Deployment `bootcamp-embedding`; OpenAI `text-embedding-3-small`, version `1`; GlobalStandard; capacity **10**; default **1536** dimensions |
+| Secondary chat | Deployment `bootcamp-chat-nano`; OpenAI `gpt-5.4-nano`, version `2026-03-17`; GlobalStandard; capacity **10** |
 
 Capacity values are Azure deployment capacity units, **not** participant counts
 or a cross-model RPM guarantee. Check each model's current capacity-to-TPM/RPM
 mapping, minimum/step size and subscription quota in the chosen regions.
-Both models were deployed in a Sweden Central MicroHack validation environment.
+The original chat and embedding models were deployed in a Sweden Central MicroHack validation environment.
 This does not establish availability or quota in other subscriptions, regions
-or subsequent events.
+or subsequent events. The new secondary model requires event-subscription preflight;
+reserve capacity for two accounts and three deployments per participant.
+
+The playful account-name prefixes are fixed; the resource-group-derived suffix
+keeps the Azure names and endpoint subdomains unique across participant
+environments. Azure cannot rename an existing account in place. On reruns the
+hook inventories Cognitive Services accounts and retains the original
+`foundry-<suffix>` and `foundry-alt-<suffix>` names if they already exist;
+their projects still receive the new display names. If both the old and new
+name for either account exist, provisioning fails rather than silently switching
+participants between accounts. An organizer must resolve the ambiguity without
+deleting participant work.
+
+For direct template deployments, supply the required
+`existingFoundryAccountNames` array with all Cognitive Services account names
+in the target resource group (or `[]` for a new group). Omitting existing names
+would select new resources instead of retaining the existing accounts.
 
 As checked on 2026-11-25, the Microsoft retirement schedule lists the chat model
 as GA through 2027-09-21 and the embedding model as GA through 2028-02-09.
-Both deployments use `NoAutoUpgrade` to avoid unexpected version changes;
+The secondary `gpt-5.4-nano` model is also GA with a listed retirement date of
+2027-09-21 in the [current retirement schedule](https://learn.microsoft.com/en-us/azure/foundry/openai/concepts/model-retirement-schedule).
+All three deployments use `NoAutoUpgrade` to avoid unexpected version changes;
 organizers must review lifecycle dates and update/revalidate before later
 events. Deployments are serialized to avoid concurrent account model updates.
 The project is deployed before the models to avoid concurrent account
@@ -86,14 +108,54 @@ operations. Changing declared model names, versions, deployment names or
 capacity is an organizer-reviewed infrastructure change, not between-lab
 recovery.
 
-The account and project have system-assigned managed identities. Account local
+Both accounts and projects have system-assigned managed identities. Account local
 authentication is disabled; public endpoints remain enabled for participant
 Entra authentication. Each supplied participant receives Azure AI User
-(`53ca6127-db72-4b80-b1b0-d745d6d5456d`) scoped to the Foundry account. Current
+(`53ca6127-db72-4b80-b1b0-d745d6d5456d`) scoped to each Foundry account. Current
 Microsoft documentation displays this unchanged built-in role as **Foundry
 User**. MicroHack retains ownership of participant control-plane roles.
 No service key, password, access token or connection string is included in
 participant-facing deployment outputs.
+
+## Date/time MCP tool (primary Foundry only)
+
+The template also deploys one Azure Container Apps Consumption environment and
+one app (`mcp-time-<uniqueString>`), using **0.25 vCPU / 0.5 GiB**, zero minimum
+replicas and one maximum replica. HTTPS ingress exposes `/mcp` using the official
+Python MCP SDK's stateless Streamable HTTP transport with JSON responses.
+Its only tool, `get_current_datetime`, returns the current UTC date/time as an
+ISO 8601 timestamp with a `+00:00` offset. `/healthz` is an HTTP probe endpoint,
+not another MCP tool. Console/system logs route to the existing Log Analytics
+workspace through Azure Monitor diagnostics without retrieving workspace keys.
+
+`mcp-time/server.py` and the pinned `mcp==1.26.0` requirement are embedded into
+the template at Bicep compilation. The app starts from `python:3.12.12-slim`,
+installs the SDK, then executes the packaged server. No registry, custom image
+build, service secret or separate deployment command is required. The environment
+needs outbound access to Docker Hub to pull the image, and PyPI to install the
+SDK and its dependencies on each cold start; installation failures terminate
+startup and appear in app logs. Startup/readiness/liveness probes protect
+traffic routing. Allow for cold-start latency; retry a timed-out first tool call.
+For restricted-network or production use, build a reviewed image containing
+the dependencies instead of installing them at startup.
+
+The original project receives a `bootcamp-date-time` connection with category
+`RemoteTool`, metadata type `generic_mcp`, and auth type `None`. Only this
+connection uses the newer stable `2025-09-01` API, which includes `RemoteTool`.
+It is available under **Build > Tools > Configured** in the primary Foundry.
+The secondary Foundry has no MCP connection, Search connection or tracing
+connection; the original lab integrations remain unchanged.
+
+The endpoint is intentionally public and unauthenticated: it exposes only the
+clock, never participant data or Azure credentials. Do not add data access or
+mutating tools without introducing appropriate authentication and authorization.
+No agent is created or modified by provisioning. To use the configured tool,
+attach it to a participant-created agent in the primary project, keeping tool-call
+approval enabled. The [Foundry MCP guide](https://learn.microsoft.com/en-us/azure/foundry/agents/how-to/tools/model-context-protocol)
+describes the agent `tools` definition: `type: mcp`, `server_label: bootcamp-date-time`,
+`server_url: <McpServerUrl>`, `allowed_tools: [get_current_datetime]`, and
+`require_approval: always`. The endpoint/tool name are sufficient for this
+no-auth service; no header or token is needed.
 
 ## Search, Storage and tracing
 
@@ -291,7 +353,7 @@ supported way to recover an environment.
 ## Participant values
 
 Only after complete successful deployment and baseline verification, the hook
-emits nine separate
+emits thirteen separate
 `HackboxCredential` **hashtables**, each with `name` and `value`:
 
 | Name | Value |
@@ -301,6 +363,10 @@ emits nine separate
 | `FoundryProjectEndpoint` | Foundry API project URL, built from the account's returned endpoint |
 | `ChatDeploymentName` | `bootcamp-chat` |
 | `EmbeddingDeploymentName` | `bootcamp-embedding` |
+| `SecondaryFoundryProjectEndpoint` | Independent secondary Foundry API project URL |
+| `SecondaryChatDeploymentName` | `bootcamp-chat-nano` |
+| `McpServerUrl` | Primary project's Container App HTTPS `/mcp` endpoint |
+| `McpConnectionName` | `bootcamp-date-time`, configured only in the primary project |
 | `SearchEndpoint` | `https://<search>.search.windows.net` |
 | `StorageAccountName` | Participant storage account |
 | `StorageBaselineContainerName` | `baseline` |
@@ -317,6 +383,7 @@ From the repository root, with PowerShell 7, Pester 6 and Azure CLI/Bicep:
 $result = Invoke-Pester -Path tests\provisioning -Output Detailed -PassThru
 if ($result.Result -ne 'Passed') { throw 'Provisioning tests failed' }
 az bicep lint --file labautomation\foundry-core.bicep
+uv run --python 3.12 --with-requirements labautomation\mcp-time\requirements.txt python -B -m unittest discover -s tests\provisioning -p test_mcp_time.py
 ```
 
 Tests invoke the real hook, substituting only platform/Azure external commands,
@@ -330,6 +397,10 @@ indexer/query readiness, and declared keyless resources/models. Network-policy
 regressions reproduce blocked Storage access, inspect the requested tag and
 network settings, and run both provisioning paths through all ten shards,
 100,000 indexed tickets, the expected 20-field schema and the known-ticket query.
+The Python test exercises MCP initialization, discovery of exactly one tool,
+an actual tool call returning a current UTC timestamp, unknown-tool errors,
+and the health endpoint over Streamable HTTP. The new resources still require
+an organizer's Azure deployment check, Tools UI check, and an agent tool call.
 Compilation checks schema/types, not subscription
 policy, live availability, quota or runtime endpoint contents.
 

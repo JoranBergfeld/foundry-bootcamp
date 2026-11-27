@@ -64,6 +64,14 @@ try {
 
 $group = Get-AzResourceGroup | Where-Object { $_.ResourceGroupName -eq $ResourceGroupName }
 $resources = @(if ($group) { Get-AzResource -ResourceGroupName $ResourceGroupName })
+$existingFoundryAccountNames = @($resources | Where-Object {
+    $_.ResourceType -eq 'Microsoft.CognitiveServices/accounts'
+} | ForEach-Object {
+    if ([string]::IsNullOrWhiteSpace($_.Name)) {
+        throw 'Foundry account inventory contains a resource without a name.'
+    }
+    $_.Name
+})
 $existingStorageAccountTags = @{}
 foreach ($resource in $resources) {
     if ($resource.ResourceType -ne 'Microsoft.Storage/storageAccounts') { continue }
@@ -80,6 +88,7 @@ $parameters = @{
     participantObjectIds = $AllowedEntraUserIds
     provisionerObjectId = $provisionerId.ToString()
     existingStorageAccountTags = $existingStorageAccountTags
+    existingFoundryAccountNames = $existingFoundryAccountNames
 }
 
 # The MicroHack helper can delete the entire RG on recycle, including same-region retries.
@@ -161,7 +170,8 @@ if ($env:BOOTCAMP_ORGANIZER_INITIAL_PROVISIONING -ceq 'true' -and $resources.Cou
 
 $requiredOutputs = @(
     'FoundryProjectEndpoint', 'ChatDeploymentName', 'EmbeddingDeploymentName',
-    'SearchEndpoint', 'StorageAccountName', 'StorageBaselineContainerName'
+    'SearchEndpoint', 'StorageAccountName', 'StorageBaselineContainerName',
+    'SecondaryFoundryProjectEndpoint', 'SecondaryChatDeploymentName', 'McpServerUrl', 'McpConnectionName'
 )
 foreach ($key in $requiredOutputs) {
     if (-not $coreDeployment.Outputs.ContainsKey($key) -or [string]::IsNullOrWhiteSpace($coreDeployment.Outputs[$key])) {
@@ -188,6 +198,10 @@ $credentialValues = [ordered]@{
     FoundryProjectEndpoint = $coreDeployment.Outputs.FoundryProjectEndpoint
     ChatDeploymentName = $coreDeployment.Outputs.ChatDeploymentName
     EmbeddingDeploymentName = $coreDeployment.Outputs.EmbeddingDeploymentName
+    SecondaryFoundryProjectEndpoint = $coreDeployment.Outputs.SecondaryFoundryProjectEndpoint
+    SecondaryChatDeploymentName = $coreDeployment.Outputs.SecondaryChatDeploymentName
+    McpServerUrl = $coreDeployment.Outputs.McpServerUrl
+    McpConnectionName = $coreDeployment.Outputs.McpConnectionName
     SearchEndpoint = $coreDeployment.Outputs.SearchEndpoint
     StorageAccountName = $coreDeployment.Outputs.StorageAccountName
     StorageBaselineContainerName = $coreDeployment.Outputs.StorageBaselineContainerName
