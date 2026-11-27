@@ -1197,7 +1197,7 @@ Describe 'MicroHack Foundry provisioning hook' {
         })
         $storageConnection.Count | Should -Be 1
         $storageConnection[0].name | Should -Match 'bootcamp-evals-storage'
-        $storageConnection[0].properties.authType | Should -Be 'ProjectManagedIdentity'
+        $storageConnection[0].properties.authType | Should -Be 'AAD' -Because 'Foundry datasets support only AAD or AccountKey storage connections'
         $storageConnection[0].properties.Keys | Should -Not -Contain 'credentials'
         $grants.Count | Should -Be $expected.Count
         @(Get-RoleGrants $arm | Where-Object Role -Match '5e0bd9bd-7b93-4f28-af87-19fc36ad61bd').Count | Should -Be 0

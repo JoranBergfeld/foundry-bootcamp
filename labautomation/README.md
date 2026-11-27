@@ -248,7 +248,7 @@ Invoke-Pester .\tests\provisioning\Deploy-Lab.Tests.ps1
 | Asset | Prepared content |
 |---|---|
 | Dataset `support-golden-v2`, version `1` | Eight validated rows copied byte-for-byte from `labs/03-evaluate/dataset/support-golden-v2.jsonl` to private `baseline/evals/support-golden-v2.jsonl`, registered as `uri_file` |
-| Storage connection `bootcamp-evals-storage` | `AzureStorageAccount`, project-managed identity, no keys or SAS; the project identity can read the dataset |
+| Storage connection `bootcamp-evals-storage` | `AzureStorageAccount`, `AAD` (Microsoft Entra ID), no keys or SAS; the project identity can read the dataset. Foundry datasets reject `ProjectManagedIdentity` storage connections |
 | Vector store `bootcamp-support-knowledge-v2` | Exactly the three files in `labs/03-evaluate/knowledge`; the answer-key dataset is never indexed |
 | Toolbox `bootcamp-support-evals` | File Search pinned to that vector store |
 | Connection `bootcamp-evals-toolbox` | RemoteTool to the version-specific toolbox MCP endpoint, `UserEntraToken`, audience `https://ai.azure.com` |

@@ -292,8 +292,8 @@ resource evalsStorageConnection 'Microsoft.CognitiveServices/accounts/projects/c
   properties: {
     category: 'AzureStorageAccount'
     target: 'https://${storage.name}.blob.core.windows.net'
-    #disable-next-line BCP036
-    authType: 'ProjectManagedIdentity'
+    // Foundry datasets reject ProjectManagedIdentity storage connections; AAD stays keyless.
+    authType: 'AAD'
     isSharedToAll: true
     metadata: {
       ApiType: 'Azure'
