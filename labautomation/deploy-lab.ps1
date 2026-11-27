@@ -172,6 +172,7 @@ $requiredOutputs = @(
     'FoundryProjectEndpoint', 'ChatDeploymentName', 'EmbeddingDeploymentName',
     'SearchEndpoint', 'StorageAccountName', 'StorageBaselineContainerName',
     'SecondaryFoundryProjectEndpoint', 'SecondaryChatDeploymentName', 'McpServerUrl', 'McpConnectionName'
+    'JudgeDeploymentName', 'FoundryProjectResourceId'
 )
 foreach ($key in $requiredOutputs) {
     if (-not $coreDeployment.Outputs.ContainsKey($key) -or [string]::IsNullOrWhiteSpace($coreDeployment.Outputs[$key])) {
@@ -192,11 +193,26 @@ if ([string]::IsNullOrWhiteSpace($baselineIndexName)) {
     throw 'Baseline indexing did not return an index name. No credentials were published.'
 }
 
+$evals = & (Join-Path $PSScriptRoot 'provision-evals.ps1') `
+    -ProjectEndpoint $coreDeployment.Outputs.FoundryProjectEndpoint `
+    -ProjectResourceId $coreDeployment.Outputs.FoundryProjectResourceId `
+    -ChatDeploymentName $coreDeployment.Outputs.ChatDeploymentName `
+    -StorageAccountName $coreDeployment.Outputs.StorageAccountName `
+    -ContainerName $coreDeployment.Outputs.StorageBaselineContainerName
+if ($evals -isnot [hashtable]) { throw 'Evaluation provisioning did not return its prepared assets. No credentials were published.' }
+foreach ($key in @('EvalsDatasetName', 'EvalsDatasetVersion', 'EvalsVectorStoreId', 'EvalsToolboxName',
+    'EvalsToolboxVersion', 'EvalsAgentName', 'EvalsAgentVersion')) {
+    if (-not $evals.ContainsKey($key) -or [string]::IsNullOrWhiteSpace($evals[$key])) {
+        throw "Evaluation provisioning is missing '$key'. No credentials were published."
+    }
+}
+
 $credentialValues = [ordered]@{
     ResourceGroupName = $ResourceGroupName
     Region = $coreDeployment.LocationUsed
     FoundryProjectEndpoint = $coreDeployment.Outputs.FoundryProjectEndpoint
     ChatDeploymentName = $coreDeployment.Outputs.ChatDeploymentName
+    JudgeDeploymentName = $coreDeployment.Outputs.JudgeDeploymentName
     EmbeddingDeploymentName = $coreDeployment.Outputs.EmbeddingDeploymentName
     SecondaryFoundryProjectEndpoint = $coreDeployment.Outputs.SecondaryFoundryProjectEndpoint
     SecondaryChatDeploymentName = $coreDeployment.Outputs.SecondaryChatDeploymentName
@@ -207,6 +223,7 @@ $credentialValues = [ordered]@{
     StorageBaselineContainerName = $coreDeployment.Outputs.StorageBaselineContainerName
     BaselineIndexName = $baselineIndexName
 }
+foreach ($key in $evals.Keys) { $credentialValues[$key] = $evals[$key] }
 foreach ($name in $credentialValues.Keys) {
     @{ HackboxCredential = @{ name = $name; value = $credentialValues[$name] } }
 }

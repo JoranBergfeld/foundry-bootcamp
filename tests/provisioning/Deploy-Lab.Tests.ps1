@@ -1,6 +1,12 @@
 BeforeAll {
     . (Join-Path $PSScriptRoot 'Fake-AzureDataPlane.ps1')
     $script:Hook = Join-Path $PSScriptRoot '..\..\labautomation\deploy-lab.ps1'
+    function Invoke-TestEvals {
+        & (Join-Path $PSScriptRoot '..\..\labautomation\provision-evals.ps1') `
+            -ProjectEndpoint 'https://foundry.example/api/projects/bootcamp' `
+            -ProjectResourceId '/subscriptions/sub/resourceGroups/participant/providers/Microsoft.CognitiveServices/accounts/foundry/projects/bootcamp' `
+            -ChatDeploymentName 'bootcamp-chat' -StorageAccountName 'stexample' -ContainerName 'baseline'
+    }
     function Get-AzContext {}
     function Get-AzAccessToken { param($ResourceUrl) }
     function Get-AzResourceGroup {}
@@ -127,6 +133,8 @@ Describe 'MicroHack Foundry provisioning hook' {
                 Outputs = @{
                     FoundryProjectEndpoint = @{ Value = 'https://foundry.example/api/projects/bootcamp' }
                     ChatDeploymentName = @{ Value = 'bootcamp-chat' }
+                    JudgeDeploymentName = @{ Value = 'bootcamp-judge' }
+                    FoundryProjectResourceId = @{ Value = '/subscriptions/sub/resourceGroups/participant/providers/Microsoft.CognitiveServices/accounts/foundry/projects/bootcamp' }
                     EmbeddingDeploymentName = @{ Value = 'bootcamp-embedding' }
                     SecondaryFoundryProjectEndpoint = @{ Value = 'https://foundry-alt.example/api/projects/bootcamp' }
                     SecondaryChatDeploymentName = @{ Value = 'bootcamp-chat-nano' }
@@ -145,6 +153,8 @@ Describe 'MicroHack Foundry provisioning hook' {
                 Outputs = @{
                     FoundryProjectEndpoint = 'https://foundry.example/api/projects/bootcamp'
                     ChatDeploymentName = 'bootcamp-chat'
+                    JudgeDeploymentName = 'bootcamp-judge'
+                    FoundryProjectResourceId = '/subscriptions/sub/resourceGroups/participant/providers/Microsoft.CognitiveServices/accounts/foundry/projects/bootcamp'
                     EmbeddingDeploymentName = 'bootcamp-embedding'
                     SecondaryFoundryProjectEndpoint = 'https://foundry-alt.example/api/projects/bootcamp'
                     SecondaryChatDeploymentName = 'bootcamp-chat-nano'
@@ -177,7 +187,7 @@ Describe 'MicroHack Foundry provisioning hook' {
             $TemplateParameterObject.participantObjectIds[0] -eq '00000000-0000-0000-0000-000000000002' -and
             $TemplateParameterObject.existingFoundryAccountNames.Count -eq 0
         }
-        $credentials.Count | Should -Be 13
+        $credentials.Count | Should -Be 21
         $values = @{}
         foreach ($credential in $credentials) {
             $credential | Should -BeOfType [hashtable]
@@ -187,6 +197,7 @@ Describe 'MicroHack Foundry provisioning hook' {
         $values.Region | Should -Be 'region-second'
         $values.FoundryProjectEndpoint | Should -Be 'https://foundry.example/api/projects/bootcamp'
         $values.ChatDeploymentName | Should -Be 'bootcamp-chat'
+        $values.JudgeDeploymentName | Should -Be 'bootcamp-judge'
         $values.EmbeddingDeploymentName | Should -Be 'bootcamp-embedding'
         $values.SecondaryFoundryProjectEndpoint | Should -Be 'https://foundry-alt.example/api/projects/bootcamp'
         $values.SecondaryChatDeploymentName | Should -Be 'bootcamp-chat-nano'
@@ -457,7 +468,8 @@ Describe 'MicroHack Foundry provisioning hook' {
         $credentials = @(& $script:Hook @script:Inputs)
         $indexName = ($credentials | Where-Object { $_.HackboxCredential.name -eq 'BaselineIndexName' }).HackboxCredential.value
         $indexName | Should -Be 'bootcamp-baseline-v1'
-        $global:ProvisioningTestDataPlane.Blobs.Count | Should -Be 10
+        @($global:ProvisioningTestDataPlane.Blobs.Keys | Where-Object { $_ -like '/baseline/dataset-v1/*' }).Count |
+            Should -Be 10
         ($global:ProvisioningTestDataPlane.Blobs.Values | Measure-Object -Property Rows -Sum).Sum | Should -Be 100000
         @($global:ProvisioningTestDataPlane.Blobs.Values | Where-Object { $_.Length -gt 15MB }).Count | Should -Be 0
         $global:ProvisioningTestDataPlane.IndexedRows | Should -Be 100000
@@ -670,16 +682,154 @@ Describe 'MicroHack Foundry provisioning hook' {
         $published.Count | Should -Be 0
     }
 
+    It 'uploads the golden dataset separately from the three indexed knowledge files and attaches the toolbox to a prompt agent' {
+        $assets = Invoke-TestEvals
+        $state = $global:ProvisioningTestDataPlane
+        $assets.EvalsDatasetName | Should -Be 'support-golden-v2'
+        $dataset = $state.Foundry.Datasets['support-golden-v2/1']
+        $dataset.type | Should -Be 'uri_file'
+        $dataset.connectionName | Should -Be 'bootcamp-evals-storage'
+        $dataset.dataUri | Should -Be 'https://stexample.blob.core.windows.net/baseline/evals/support-golden-v2.jsonl'
+        @($state.Blobs['/baseline/evals/support-golden-v2.jsonl'].Content -split "`n" | Where-Object { $_ }) |
+            Should -HaveCount 8
+        $state.Foundry.Files.Count | Should -Be 3
+        @($state.Foundry.Files.Values | Where-Object { $_.filename -like '*golden*' }).Count | Should -Be 0
+        $state.Foundry.Stores[$assets.EvalsVectorStoreId].file_ids.Count | Should -Be 3
+        $toolbox = $state.Foundry.toolboxes[$assets.EvalsToolboxName][0]
+        $toolbox.tools[0].type | Should -Be 'file_search'
+        $toolbox.tools[0].vector_store_ids[0] | Should -Be $assets.EvalsVectorStoreId
+        $agent = $state.Foundry.agents[$assets.EvalsAgentName][0]
+        $agent.definition.kind | Should -Be 'prompt'
+        $agent.definition.model | Should -Be 'bootcamp-chat'
+        $agent.definition.instructions | Should -Match 'Routing override:.*wait until Monday'
+        $agent.definition.tools[0].type | Should -Be 'mcp'
+        $agent.definition.tools[0].server_url | Should -BeLike '*/toolboxes/bootcamp-support-evals/versions/1/mcp?api-version=v1'
+        $agent.definition.tools[0].project_connection_id | Should -Be 'bootcamp-evals-toolbox'
+        $state.Foundry.Connections['bootcamp-evals-toolbox'].properties.authType | Should -Be 'UserEntraToken'
+        $state.Foundry.Connections['bootcamp-evals-toolbox'].properties.audience | Should -Be 'https://ai.azure.com'
+    }
+
+    It 'reuses the pinned baseline through paginated listings and preserves participant agent and toolbox versions' {
+        $original = Invoke-TestEvals
+        $state = $global:ProvisioningTestDataPlane
+        foreach ($kind in @('agents', 'toolboxes')) {
+            $name = if ($kind -eq 'agents') { $original.EvalsAgentName } else { $original.EvalsToolboxName }
+            $participant = $state.Foundry[$kind][$name][0] | ConvertTo-Json -Depth 50 | ConvertFrom-Json -AsHashtable
+            $participant.version = '2'
+            $participant.id = "participant-$kind"
+            if ($kind -eq 'agents') { $participant.definition.instructions = 'Participant fixed routing.' } else {
+                $participant.tools = @(@{ type = 'web_search' })
+            }
+            $state.Foundry[$kind][$name] += $participant
+        }
+        $state.EvalsPageSize = 1
+        $state.EvalsMcpSse = $true
+        $before = $state.Requests.Count
+        $rerun = Invoke-TestEvals
+        $rerun.EvalsAgentVersion | Should -Be $original.EvalsAgentVersion
+        $rerun.EvalsToolboxVersion | Should -Be $original.EvalsToolboxVersion
+        $rerun.EvalsVectorStoreId | Should -Be $original.EvalsVectorStoreId
+        @($state.Requests | Select-Object -Skip $before | Where-Object {
+            $_.Method -in @('Put', 'Patch', 'Delete') -or
+            ($_.Method -eq 'Post' -and $_.Uri -notlike '*/search' -and $_.Uri -notlike '*/mcp?*')
+        }).Count | Should -Be 0
+        $state.Foundry.agents[$original.EvalsAgentName][1].definition.instructions | Should -Be 'Participant fixed routing.'
+        $state.Foundry.toolboxes[$original.EvalsToolboxName][1].tools[0].type | Should -Be 'web_search'
+    }
+
+    It 'stops on incompatible existing eval <Resource> without overwriting it' -ForEach @(
+        @{ Resource = 'dataset'; Message = '*dataset*incompatible*not overwritten*' }
+        @{ Resource = 'file'; Message = '*file*different content*not replaced*' }
+        @{ Resource = 'store'; Message = '*vector store*incompatible*not modified*' }
+        @{ Resource = 'toolbox'; Message = '*toolboxes*no compatible*not modified*' }
+        @{ Resource = 'connection'; Message = '*connection*incompatible*not overwritten*' }
+        @{ Resource = 'agent'; Message = '*agents*no compatible*not modified*' }
+    ) {
+        $assets = Invoke-TestEvals
+        $state = $global:ProvisioningTestDataPlane
+        switch ($Resource) {
+            dataset { $state.Foundry.Datasets['support-golden-v2/1'].tags.sha256 = 'participant' }
+            file { $state.Foundry.Files['file-1'].Content = 'participant content' }
+            store { $state.Foundry.Stores[$assets.EvalsVectorStoreId].metadata['bootcamp-source-sha256'] = 'participant' }
+            toolbox { $state.Foundry.toolboxes[$assets.EvalsToolboxName][0].tools = @(@{ type = 'web_search' }) }
+            connection { $state.Foundry.Connections['bootcamp-evals-toolbox'].properties.authType = 'None' }
+            agent { $state.Foundry.agents[$assets.EvalsAgentName][0].definition.model = 'participant-model' }
+        }
+        $before = $state.Requests.Count
+        { Invoke-TestEvals } | Should -Throw $Message
+        @($state.Requests | Select-Object -Skip $before | Where-Object {
+            $_.Method -in @('Put', 'Patch', 'Delete') -or
+            ($_.Method -eq 'Post' -and $_.Uri -notlike '*/search' -and $_.Uri -notlike '*/mcp?*')
+        }).Count | Should -Be 0
+    }
+
+    It 'does not replay an uncertain file create and reconciles the partial upload on rerun' {
+        Mock Invoke-WebRequest {
+            if ($Uri -eq 'https://foundry.example/openai/v1/files' -and $Method -eq 'Post' -and
+                $global:ProvisioningTestDataPlane.Foundry.Files.Count -eq 2) {
+                return [pscustomobject]@{ StatusCode = 500; Content = 'Uncertain create'; Headers = @{} }
+            }
+            Invoke-FakeAzureDataPlane -Uri $Uri -Method $Method -Headers $Headers -Body $Body -State $global:ProvisioningTestDataPlane
+        }
+        { Invoke-TestEvals } | Should -Throw '*HTTP 500*'
+        Should -Invoke Invoke-WebRequest -Times 3 -Exactly -ParameterFilter {
+            $Uri -eq 'https://foundry.example/openai/v1/files' -and $Method -eq 'Post'
+        }
+        Mock Invoke-WebRequest {
+            Invoke-FakeAzureDataPlane -Uri $Uri -Method $Method -Headers $Headers -Body $Body -State $global:ProvisioningTestDataPlane
+        }
+        Invoke-TestEvals | Out-Null
+        $global:ProvisioningTestDataPlane.Foundry.Files.Count | Should -Be 3
+        $global:ProvisioningTestDataPlane.Foundry.Stores.Count | Should -Be 1
+    }
+
+    It 'does not provision the toolbox before <Status> knowledge ingestion is resolved' -ForEach @(
+        @{ Status = 'failed'; Message = '*ingestion failed*' }
+        @{ Status = 'in_progress'; Message = '*ingestion did not finish*' }
+    ) {
+        $state = $global:ProvisioningTestDataPlane
+        $state.EvalsIngestionStatus = $Status
+        { Invoke-TestEvals } | Should -Throw $Message
+        $state.Foundry.toolboxes.Count | Should -Be 0
+        $state.Foundry.agents.Count | Should -Be 0
+    }
+
+    It 'refuses an incomplete existing store rather than silently replacing it' {
+        $assets = Invoke-TestEvals
+        $state = $global:ProvisioningTestDataPlane
+        $state.Foundry.Stores[$assets.EvalsVectorStoreId].file_ids = @('file-1', 'file-2')
+        { Invoke-TestEvals } | Should -Throw '*exactly the three expected knowledge files*'
+        $state.Foundry.Stores.Count | Should -Be 1
+    }
+
+    It 'publishes no credentials when eval knowledge is not queryable' {
+        $global:ProvisioningTestDataPlane.EvalsSearchEmpty = $true
+        $published = [System.Collections.Generic.List[object]]::new()
+        { & $script:Hook @script:Inputs | ForEach-Object { $published.Add($_) } } |
+            Should -Throw '*did not retrieve the urgent support policy*'
+        $published.Count | Should -Be 0
+    }
+
+    It 'does not create an agent when toolbox discovery returns a JSON-RPC error' {
+        $global:ProvisioningTestDataPlane.EvalsMcpError = $true
+        { Invoke-TestEvals } | Should -Throw '*toolbox MCP initialize failed*Toolbox denied*'
+        $global:ProvisioningTestDataPlane.Foundry.agents.Count | Should -Be 0
+    }
+
     It 'publishes nothing when the new required <Output> is missing' -ForEach @(
         @{ Output = 'SecondaryFoundryProjectEndpoint' }
         @{ Output = 'SecondaryChatDeploymentName' }
         @{ Output = 'McpServerUrl' }
         @{ Output = 'McpConnectionName' }
+        @{ Output = 'JudgeDeploymentName' }
+        @{ Output = 'FoundryProjectResourceId' }
     ) {
         Mock Invoke-MhhDeploymentWithRegionFallback {
             $outputs = @{
                 FoundryProjectEndpoint = 'https://foundry.example/api/projects/bootcamp'
                 ChatDeploymentName = 'bootcamp-chat'
+                JudgeDeploymentName = 'bootcamp-judge'
+                FoundryProjectResourceId = '/subscriptions/sub/resourceGroups/participant/providers/Microsoft.CognitiveServices/accounts/foundry/projects/bootcamp'
                 EmbeddingDeploymentName = 'bootcamp-embedding'
                 SecondaryFoundryProjectEndpoint = 'https://foundry-alt.example/api/projects/bootcamp'
                 SecondaryChatDeploymentName = 'bootcamp-chat-nano'
@@ -739,7 +889,9 @@ Describe 'MicroHack Foundry provisioning hook' {
         foreach ($item in $project) { $item.identity.type | Should -Be 'SystemAssigned' }
         @($project | Where-Object { $_.properties.displayName -eq 'Sir Prompts-a-Lot' }).Count | Should -Be 1
         @($project | Where-Object { $_.properties.displayName -eq 'Count Tokenstein' }).Count | Should -Be 1
-        $grant = @(Get-RoleGrants $arm | Where-Object Role -Match '53ca6127-db72-4b80-b1b0-d745d6d5456d')
+        $grant = @(Get-RoleGrants $arm | Where-Object {
+            $_.Role -match '53ca6127-db72-4b80-b1b0-d745d6d5456d' -and $_.Principal -match 'participantObjectIds'
+        })
         $grant.Count | Should -Be 2
         foreach ($item in $grant) {
             $item.Principal | Should -Match 'participantObjectIds'
@@ -852,6 +1004,7 @@ Describe 'MicroHack Foundry provisioning hook' {
             @{ Role = 'ba92f5b4-2d11-453d-a403-e96b0029c9fe'; Scope = 'Microsoft.Storage/storageAccounts' }
             @{ Role = '7ca78c08-252a-4471-8644-bb5ff32d4ba0'; Scope = 'Microsoft.Search/searchServices' }
             @{ Role = '1407120a-92aa-4202-b7e9-c0e197c71c8f'; Scope = 'Microsoft.Search/searchServices' }
+            @{ Role = '53ca6127-db72-4b80-b1b0-d745d6d5456d'; Scope = 'Microsoft.CognitiveServices/accounts' }
         )) {
             @($grants | Where-Object { $_.Role -match $expected.Role -and $_.Scope -match $expected.Scope }).Count |
                 Should -Be 1
@@ -875,11 +1028,20 @@ Describe 'MicroHack Foundry provisioning hook' {
             # Search reads the baseline container; the full-text baseline needs no Foundry access.
             @{ Role = '2a2b9908-6ea1-4ae2-8e65-a410df84e7d1'; Principal = 'Microsoft.Search/searchServices'; Scope = 'Microsoft.Storage/storageAccounts' }
             @{ Role = '3913510d-42f4-4e42-8a64-420c390055eb'; Principal = 'accounts/projects'; Scope = 'Microsoft.Insights/components' }
+            @{ Role = '2a2b9908-6ea1-4ae2-8e65-a410df84e7d1'; Principal = 'accounts/projects'; Scope = 'Microsoft.Storage/storageAccounts' }
         )
         foreach ($binding in $expected) {
             @($grants | Where-Object { $_.Role -match $binding.Role -and $_.Principal -match $binding.Principal -and
                 $_.Scope -match $binding.Scope }).Count | Should -Be 1 -Because "$($binding.Principal) needs $($binding.Role)"
         }
+        $storageConnection = @($arm.resources | Where-Object {
+            $_.type -eq 'Microsoft.CognitiveServices/accounts/projects/connections' -and
+            $_.properties.category -eq 'AzureStorageAccount'
+        })
+        $storageConnection.Count | Should -Be 1
+        $storageConnection[0].name | Should -Match 'bootcamp-evals-storage'
+        $storageConnection[0].properties.authType | Should -Be 'ProjectManagedIdentity'
+        $storageConnection[0].properties.Keys | Should -Not -Contain 'credentials'
         $grants.Count | Should -Be $expected.Count
         @(Get-RoleGrants $arm | Where-Object Role -Match '5e0bd9bd-7b93-4f28-af87-19fc36ad61bd').Count | Should -Be 0
         $search = @($arm.resources | Where-Object type -eq 'Microsoft.CognitiveServices/accounts/projects/connections' |
@@ -895,7 +1057,7 @@ Describe 'MicroHack Foundry provisioning hook' {
         $LASTEXITCODE | Should -Be 0
         $arm = Get-Content $compiled -Raw | ConvertFrom-Json -AsHashtable
         $models = @($arm.resources | Where-Object type -eq 'Microsoft.CognitiveServices/accounts/deployments')
-        $models.Count | Should -Be 3
+        $models.Count | Should -Be 4
         $chat = $models | Where-Object { $_.properties.model.name -eq 'gpt-5.4-mini' }
         $chat.properties.model.version | Should -Be '2026-03-17'
         $chat.sku.name | Should -Be 'GlobalStandard'
@@ -904,12 +1066,17 @@ Describe 'MicroHack Foundry provisioning hook' {
         $embedding.properties.model.version | Should -Be '1'
         $embedding.sku.name | Should -Be 'GlobalStandard'
         $embedding.sku.capacity | Should -Be 10
-        $nano = $models | Where-Object { $_.properties.model.name -eq 'gpt-5.4-nano' }
+        $nano = $models | Where-Object { $_.name -match 'secondaryAccountName' }
         $nano.properties.model.version | Should -Be '2026-03-17'
         $nano.name | Should -Match 'secondaryAccountName'
         $nano.sku.name | Should -Be 'GlobalStandard'
         $nano.sku.capacity | Should -Be 10
         $arm.outputs.SecondaryChatDeploymentName.value | Should -Be 'bootcamp-chat-nano'
+        $judge = $models | Where-Object { $_.name -match "'bootcamp-judge'" }
+        $judge.properties.model.name | Should -Be 'gpt-5.4-nano'
+        $judge.properties.model.version | Should -Be '2026-03-17'
+        $judge.sku.capacity | Should -Be 10
+        $arm.outputs.JudgeDeploymentName.value | Should -Be 'bootcamp-judge'
         foreach ($model in $models) {
             $model.properties.model.format | Should -Be 'OpenAI'
             $model.properties.versionUpgradeOption | Should -Be 'NoAutoUpgrade'
@@ -925,8 +1092,10 @@ Describe 'MicroHack Foundry provisioning hook' {
         $embedding = $models | Where-Object { $_.properties.model.name -eq 'text-embedding-3-small' }
         $chat.dependsOn | Should -Contain "[resourceId('Microsoft.CognitiveServices/accounts/projects', variables('accountName'), variables('projectName'))]"
         $embedding.dependsOn | Should -Contain "[resourceId('Microsoft.CognitiveServices/accounts/deployments', variables('accountName'), 'bootcamp-chat')]"
-        $nano = $models | Where-Object { $_.properties.model.name -eq 'gpt-5.4-nano' }
+        $nano = $models | Where-Object { $_.name -match 'secondaryAccountName' }
         $nano.dependsOn | Should -Contain "[resourceId('Microsoft.CognitiveServices/accounts/projects', variables('secondaryAccountName'), variables('projectName'))]"
+        $judge = $models | Where-Object { $_.name -match "'bootcamp-judge'" }
+        $judge.dependsOn | Should -Contain "[resourceId('Microsoft.CognitiveServices/accounts/deployments', variables('accountName'), 'bootcamp-embedding')]"
     }
 
     It 'hosts one scale-to-zero HTTPS MCP service and exposes it only in the primary Foundry Tools' {

@@ -119,6 +119,35 @@ resource embedding 'Microsoft.CognitiveServices/accounts/deployments@2025-06-01'
   ]
 }
 
+resource judge 'Microsoft.CognitiveServices/accounts/deployments@2025-06-01' = {
+  parent: account
+  name: 'bootcamp-judge'
+  sku: {
+    name: 'GlobalStandard'
+    capacity: 10
+  }
+  properties: {
+    model: {
+      format: 'OpenAI'
+      name: 'gpt-5.4-nano'
+      version: '2026-03-17'
+    }
+    versionUpgradeOption: 'NoAutoUpgrade'
+  }
+  dependsOn: [
+    embedding
+  ]
+}
+
+resource provisionerFoundryAccess 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (!provisionerIsParticipant) {
+  name: guid(account.id, provisionerObjectId, azureAiUserRoleId)
+  scope: account
+  properties: {
+    roleDefinitionId: azureAiUserRoleId
+    principalId: provisionerObjectId
+  }
+}
+
 resource participantAccess 'Microsoft.Authorization/roleAssignments@2022-04-01' = [for participantId in union(participantObjectIds, []): {
   name: guid(account.id, participantId, azureAiUserRoleId)
   scope: account
@@ -246,6 +275,32 @@ resource baselineContainer 'Microsoft.Storage/storageAccounts/blobServices/conta
   name: 'baseline'
   properties: {
     publicAccess: 'None'
+  }
+}
+
+resource evalsStorageConnection 'Microsoft.CognitiveServices/accounts/projects/connections@2025-09-01' = {
+  parent: project
+  name: 'bootcamp-evals-storage'
+  properties: {
+    category: 'AzureStorageAccount'
+    target: 'https://${storage.name}.blob.core.windows.net'
+    #disable-next-line BCP036
+    authType: 'ProjectManagedIdentity'
+    isSharedToAll: true
+    metadata: {
+      ApiType: 'Azure'
+      ResourceId: storage.id
+    }
+  }
+}
+
+resource projectEvalsBlobReader 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
+  name: guid(storage.id, project.id, storageBlobDataReaderRoleId)
+  scope: storage
+  properties: {
+    roleDefinitionId: storageBlobDataReaderRoleId
+    principalId: project.identity.principalId
+    principalType: 'ServicePrincipal'
   }
 }
 
@@ -561,6 +616,8 @@ resource mcpConnection 'Microsoft.CognitiveServices/accounts/projects/connection
 
 output FoundryProjectEndpoint string = uri(account.properties.endpoints['AI Foundry API'], 'api/projects/${project.name}')
 output ChatDeploymentName string = chat.name
+output JudgeDeploymentName string = judge.name
+output FoundryProjectResourceId string = project.id
 output EmbeddingDeploymentName string = embedding.name
 output SecondaryFoundryProjectEndpoint string = uri(secondaryAccount.properties.endpoints['AI Foundry API'], 'api/projects/${secondaryProject.name}')
 output SecondaryChatDeploymentName string = secondaryChat.name

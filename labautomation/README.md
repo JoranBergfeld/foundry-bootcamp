@@ -8,7 +8,7 @@ There is no per-lab provisioning entry point or shared subscription-level
 Foundry account. Each participant environment receives two independent Foundry
 accounts/projects with deployed models, plus AI Search, Storage
 and Application Insights tracing (#16), plus the pre-indexed baseline dataset
-(#17).
+(#17) and prepared evaluation assets (#31).
 
 ## Operator prerequisites
 
@@ -18,7 +18,7 @@ and Application Insights tracing (#16), plus the pre-indexed baseline dataset
   assignment creation. The hook verifies the context and never signs in or
   switches subscriptions. Its ARM access token must contain the authenticated
   principal's Entra `oid` claim; the same principal must be able to obtain
-  tokens for Storage and Search. The template grants this principal the
+  tokens for Storage, Search and `https://ai.azure.com/`. The template grants this principal the
   resource-scoped data-plane roles required below.
 - Register `Microsoft.CognitiveServices`, `Microsoft.Search`,
   `Microsoft.Storage`, `Microsoft.OperationalInsights`, `Microsoft.Insights`
@@ -35,7 +35,7 @@ and Application Insights tracing (#16), plus the pre-indexed baseline dataset
   input is accepted; empty/whitespace input fails before any Azure operation.
   The repository deliberately supplies no default region, including in
   `lab-defaults.json`.
-- Validate access, model availability, deployment type and quota for **all three**
+- Validate access, model availability, deployment type and quota for **all four deployments**
   models in the actual event subscriptions and preferred regions before
   participant allocation. For each region, organizer read-only preflight can
   use `az cognitiveservices model list --location <region> --subscription <id>`
@@ -70,6 +70,7 @@ The RG-scoped `foundry-core.bicep` declares these choices, using the stable
 | Secondary Foundry account | **Count Tokenstein**: `AIServices`, S0, `foundry-count-tokenstein-<RG-derived uniqueString>` |
 | Projects | `bootcamp`, one non-hub project per account, with matching display names; original lab project/endpoints retained |
 | Chat | Deployment `bootcamp-chat`; OpenAI `gpt-5.4-mini`, version `2026-03-17`; GlobalStandard; capacity **10** |
+| Evaluation judge (primary) | Deployment `bootcamp-judge`; OpenAI `gpt-5.4-nano`, version `2026-03-17`; GlobalStandard; capacity **10** |
 | Embedding | Deployment `bootcamp-embedding`; OpenAI `text-embedding-3-small`, version `1`; GlobalStandard; capacity **10**; default **1536** dimensions |
 | Secondary chat | Deployment `bootcamp-chat-nano`; OpenAI `gpt-5.4-nano`, version `2026-03-17`; GlobalStandard; capacity **10** |
 
@@ -79,7 +80,11 @@ mapping, minimum/step size and subscription quota in the chosen regions.
 The original chat and embedding models were deployed in a Sweden Central MicroHack validation environment.
 This does not establish availability or quota in other subscriptions, regions
 or subsequent events. The new secondary model requires event-subscription preflight;
-reserve capacity for two accounts and three deployments per participant.
+reserve capacity for two accounts and four deployments per participant.
+Nano needs **20 capacity units per participant** across the primary judge and
+secondary chat deployments. The primary agent and judge are different models
+in the same account, so the evaluation wizard can select both; the existing
+Count Tokenstein deployment and endpoint are retained.
 
 The playful account-name prefixes are fixed; the resource-group-derived suffix
 keeps the Azure names and endpoint subdomains unique across participant
@@ -100,7 +105,7 @@ As checked on 2026-11-25, the Microsoft retirement schedule lists the chat model
 as GA through 2027-09-21 and the embedding model as GA through 2028-02-09.
 The secondary `gpt-5.4-nano` model is also GA with a listed retirement date of
 2027-09-21 in the [current retirement schedule](https://learn.microsoft.com/en-us/azure/foundry/openai/concepts/model-retirement-schedule).
-All three deployments use `NoAutoUpgrade` to avoid unexpected version changes;
+All four deployments use `NoAutoUpgrade` to avoid unexpected version changes;
 organizers must review lifecycle dates and update/revalidate before later
 events. Deployments are serialized to avoid concurrent account model updates.
 The project is deployed before the models to avoid concurrent account
@@ -149,7 +154,7 @@ connection; the original lab integrations remain unchanged.
 The endpoint is intentionally public and unauthenticated: it exposes only the
 clock, never participant data or Azure credentials. Do not add data access or
 mutating tools without introducing appropriate authentication and authorization.
-No agent is created or modified by provisioning. To use the configured tool,
+The date/time tool is not attached to the provisioned evaluation agent. To use it,
 attach it to a participant-created agent in the primary project, keeping tool-call
 approval enabled. The [Foundry MCP guide](https://learn.microsoft.com/en-us/azure/foundry/agents/how-to/tools/model-context-protocol)
 describes the agent `tools` definition: `type: mcp`, `server_label: bootcamp-date-time`,
@@ -190,16 +195,74 @@ idempotent):
 | Search MI | Storage Blob Data Reader | Storage | Indexer reads `baseline` (#17) |
 | Provisioner | Storage Blob Data Contributor | Storage | Upload and verify the baseline |
 | Provisioner | Search Service Contributor, Search Index Data Reader | Search | Create the indexer and verify queries |
+| Provisioner | Foundry User | Primary Foundry account | Upload evaluation files and create dataset, toolbox and prompt-agent versions |
+| Foundry project MI | Storage Blob Data Reader | Storage | Read the private golden dataset through `bootcamp-evals-storage` |
 
 If the provisioner is also a supplied participant, its participant roles
 already cover these operations and duplicate role assignments are avoided.
 All role assignments use stable resource/principal/role-derived names.
 
-## Lab 01 File Search preflight
+## Evaluation assets and File Search preflight
+
+After baseline indexing succeeds, `provision-evals.ps1` prepares these assets in
+the **primary** project:
+
+| Asset | Prepared content |
+|---|---|
+| Dataset `support-golden-v2`, version `1` | Eight validated rows copied byte-for-byte from `labs/03-evaluate/dataset/support-golden-v2.jsonl` to private `baseline/evals/support-golden-v2.jsonl`, registered as `uri_file` |
+| Storage connection `bootcamp-evals-storage` | `AzureStorageAccount`, project-managed identity, no keys or SAS; the project identity can read the dataset |
+| Vector store `bootcamp-support-knowledge-v2` | Exactly the three files in `labs/03-evaluate/knowledge`; the answer-key dataset is never indexed |
+| Toolbox `bootcamp-support-evals` | File Search pinned to that vector store |
+| Connection `bootcamp-evals-toolbox` | RemoteTool to the version-specific toolbox MCP endpoint, `UserEntraToken`, audience `https://ai.azure.com` |
+| Prompt agent `bootcamp-support-agent` | `bootcamp-chat`, pinned toolbox version, deliberately incorrect weekend routing override from Lab 03 |
+
+Dataset, agent and toolbox operations use the Foundry `v1` data-plane API.
+The toolbox connection uses management API `2026-09-01`, whose provider supports
+`UserEntraToken`. Toolbox file and vector-store requests use the **account-level**
+`/openai/v1` endpoint with `x-aml-project-id` obtained from the project's
+`properties.amlWorkspace.internalId`. Do not drop this header or substitute
+another project's store. See [File Search](https://learn.microsoft.com/azure/foundry/agents/how-to/tools/file-search)
+and [toolbox setup](https://learn.microsoft.com/azure/foundry/agents/how-to/tools/toolbox).
+The toolbox tool uses the flat `vector_store_ids` shape in the current SDK contract.
+
+Uploads are reconciled by content-addressed filenames and content read-back.
+The private dataset blob is create-only and checked by length, SHA-256 and MD5;
+an incompatible existing dataset registration fails without an update. A rerun
+reuses the vector store only when its knowledge manifest and exact file set
+match. It waits for all three files to complete ingestion, rejects failed or
+cancelled files and verifies a search retrieves the urgent support policy.
+Ingestion polling is bounded to approximately 30 minutes, plus request retries.
+
+Agent and toolbox versions are immutable. Reruns reuse the compatible
+provisioning baseline, even when participants have created newer versions;
+they never change participant versions or promote defaults. A conflicting
+reserved asset or connection stops provisioning without deleting or replacing
+it. A network error or server failure during a non-idempotent create stops the
+run rather than blindly creating duplicates; rerun the hook to reconcile partial
+uploads. Do not run concurrent hooks for one participant.
+
+The prompt agent uses user-identity passthrough for its read-only toolbox;
+all participants already have Foundry User on the primary account.
+It sets `require_approval: never` only for this curated, read-only knowledge
+toolbox so unattended agent evaluations can run. This is not approval to
+disable confirmation for the separate date/time tool or other MCP tools.
+Participants copy the baseline agent before the lab fix and keep the golden
+dataset frozen.
+
+The hook verifies asset definitions, file content, vector retrieval, MCP
+initialization/discovery and an actual toolbox File Search call, not a complete
+agent evaluation. Before fan-out, organizers must confirm that a participant
+agent call can retrieve the support policy,
+then run Lab 03 with nano selected as judge. In particular, verify the tenant's
+user-token passthrough policy, File Search region/model support and judge
+evaluator compatibility. No live evaluation acceptance is implied by local tests.
+
+### Lab 01 File Search
 
 The basic-agent lab uploads two fictional files to a File Search vector store.
-The deployment does not configure a standard agent setup or verify this
-portal workflow. Before the event, organizers must confirm that the actual
+The deployment does not configure a standard agent setup. The evaluation
+hook now exercises basic File Search uploads and vector ingestion, but not
+Lab 01's separate portal workflow. Before the event, organizers must confirm that the actual
 participant project and region allow file upload, vector-store creation and
 attachment to a prompt agent, and that participants have the required access.
 Basic agent setup uses Microsoft-managed file and search resources; a
@@ -352,8 +415,8 @@ supported way to recover an environment.
 
 ## Participant values
 
-Only after complete successful deployment and baseline verification, the hook
-emits thirteen separate
+Only after complete successful deployment, baseline verification and evaluation
+asset verification, the hook emits twenty-one separate
 `HackboxCredential` **hashtables**, each with `name` and `value`:
 
 | Name | Value |
@@ -362,6 +425,7 @@ emits thirteen separate
 | `Region` | Effective deployment region, not merely the first preference |
 | `FoundryProjectEndpoint` | Foundry API project URL, built from the account's returned endpoint |
 | `ChatDeploymentName` | `bootcamp-chat` |
+| `JudgeDeploymentName` | `bootcamp-judge`, nano in the primary account |
 | `EmbeddingDeploymentName` | `bootcamp-embedding` |
 | `SecondaryFoundryProjectEndpoint` | Independent secondary Foundry API project URL |
 | `SecondaryChatDeploymentName` | `bootcamp-chat-nano` |
@@ -371,6 +435,17 @@ emits thirteen separate
 | `StorageAccountName` | Participant storage account |
 | `StorageBaselineContainerName` | `baseline` |
 | `BaselineIndexName` | `bootcamp-baseline-v1` |
+| `EvalsDatasetName` | `support-golden-v2` |
+| `EvalsDatasetVersion` | `1` |
+| `EvalsVectorStoreId` | Verified knowledge store ID |
+| `EvalsToolboxName` | `bootcamp-support-evals` |
+| `EvalsToolboxVersion` | Prepared immutable toolbox version |
+| `EvalsAgentName` | `bootcamp-support-agent` |
+| `EvalsAgentVersion` | Prepared baseline version, not necessarily the latest participant version |
+
+`FoundryProjectResourceId` is an internal ARM output used by the hook to resolve
+project isolation and configure the toolbox connection; it is not published
+as a dashboard credential.
 
 `labautomation` is not participant download material. Guides consume these
 dashboard values; they must not direct participants to run provisioning.
@@ -387,13 +462,17 @@ uv run --python 3.12 --with-requirements labautomation\mcp-time\requirements.txt
 ```
 
 Tests invoke the real hook, substituting only platform/Azure external commands,
-including a simulated Storage/Search data plane, and compile/inspect the ARM
+including a simulated Storage/Search/Foundry data plane, and compile/inspect the ARM
 deployment artifact without deploying it. They
 exercise region input/order, standard first-run RG creation, existing-RG region
 checks, organizer gating, in-place reruns, platform scope
 and identity inputs, pre-existing RG metadata/access preservation, success-only
 credential publication, the pinned source archive, safe dataset sharding,
-indexer/query readiness, and declared keyless resources/models. Network-policy
+indexer/query readiness, and declared keyless resources/models. Evaluation
+cases cover dataset/knowledge separation, toolbox attachment, exact file
+membership, failed/pending ingestion, query readiness, paginated reconciliation,
+partial upload recovery, conflicting assets and preservation of participant
+agent/toolbox versions. Network-policy
 regressions reproduce blocked Storage access, inspect the requested tag and
 network settings, and run both provisioning paths through all ten shards,
 100,000 indexed tickets, the expected 20-field schema and the known-ticket query.

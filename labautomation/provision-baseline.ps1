@@ -14,98 +14,14 @@ param(
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 
-function Get-BaselineToken([string]$ResourceUrl) {
-    $token = (Get-AzAccessToken -ResourceUrl $ResourceUrl).Token
-    if ($token -is [securestring]) {
-        return [System.Net.NetworkCredential]::new('', $token).Password
-    }
-    if ($token -is [string] -and -not [string]::IsNullOrWhiteSpace($token)) {
-        return $token
-    }
-    throw "Baseline provisioning could not obtain an Entra token for $ResourceUrl."
-}
-
-function Invoke-BaselineRequest {
-    param(
-        [string]$Uri,
-        [string]$Method,
-        [string]$ResourceUrl,
-        [hashtable]$Headers = @{},
-        [byte[]]$Body,
-        [string]$ContentType,
-        [int[]]$AcceptStatus = @()
-    )
-    for ($attempt = 1; $attempt -le 61; $attempt++) {
-        $Headers.Authorization = "Bearer $(Get-BaselineToken $ResourceUrl)"
-        if ($ResourceUrl -eq 'https://storage.azure.com/') {
-            $Headers['x-ms-date'] = [DateTime]::UtcNow.ToString('R', [Globalization.CultureInfo]::InvariantCulture)
-            $Headers['x-ms-version'] = '2022-11-02'
-        }
-        $request = @{
-            Uri = $Uri
-            Method = $Method
-            Headers = $Headers
-            SkipHttpErrorCheck = $true
-            TimeoutSec = 60
-            ErrorAction = 'Stop'
-        }
-        if ($null -ne $Body) { $request.Body = $Body }
-        if ($ContentType) { $request.ContentType = $ContentType }
-        try {
-            $response = Invoke-WebRequest @request
-        } catch [System.Net.Http.HttpRequestException], [System.Threading.Tasks.TaskCanceledException] {
-            if ($attempt -eq 61) {
-                throw "Baseline $Method request to $Uri failed: $($_.Exception.Message)"
-            }
-            Start-Sleep -Seconds 10
-            continue
-        }
-        $status = [int]$response.StatusCode
-        if (($status -ge 200 -and $status -lt 300) -or $status -in $AcceptStatus) {
-            return $response
-        }
-        if (($status -eq 403 -or $status -eq 429 -or $status -ge 500) -and $attempt -lt 61) {
-            Start-Sleep -Seconds 10
-            continue
-        }
-        throw "Baseline $Method request to $Uri failed with HTTP $status. $($response.Content)"
-    }
-}
-
-function Assert-BaselineBlob($Response, [byte[]]$Bytes, [string]$Hash, [string]$Uri) {
-    $length = @($Response.Headers['Content-Length'])[0]
-    $remoteHash = @($Response.Headers['x-ms-meta-sha256'])[0]
-    $remoteMd5 = @($Response.Headers['Content-MD5'])[0]
-    $expectedMd5 = [Convert]::ToBase64String([Security.Cryptography.MD5]::HashData($Bytes))
-    if ($null -eq $length -or [long]$length -ne $Bytes.Length -or
-        $remoteHash -ne $Hash -or $remoteMd5 -ne $expectedMd5) {
-        throw "Baseline blob $Uri already exists with different content; it was not overwritten."
-    }
-}
+. (Join-Path $PSScriptRoot 'provisioning-http.ps1')
 
 function Publish-BaselineBlob([byte[]]$Bytes, [int]$Part) {
     if ($Bytes.Length -gt 15MB) {
         throw "Baseline CSV shard $Part exceeds the safe Azure Search Basic blob size."
     }
-    $hash = [Convert]::ToHexString([Security.Cryptography.SHA256]::HashData($Bytes)).ToLowerInvariant()
     $uri = "https://$StorageAccountName.blob.core.windows.net/$ContainerName/dataset-v1/part-$('{0:D3}' -f $Part).csv"
-    $existing = Invoke-BaselineRequest -Uri $uri -Method Head -ResourceUrl 'https://storage.azure.com/' -AcceptStatus 404
-    if ($existing.StatusCode -ne 404) {
-        Assert-BaselineBlob $existing $Bytes $hash $uri
-        return
-    }
-    $headers = @{
-        'x-ms-blob-type' = 'BlockBlob'
-        'x-ms-meta-sha256' = $hash
-        'Content-MD5' = [Convert]::ToBase64String([Security.Cryptography.MD5]::HashData($Bytes))
-        'If-None-Match' = '*'
-    }
-    $created = Invoke-BaselineRequest -Uri $uri -Method Put -ResourceUrl 'https://storage.azure.com/' `
-        -Headers $headers -Body $Bytes -ContentType 'text/csv; charset=utf-8' -AcceptStatus 412
-    if ($created.StatusCode -eq 412) {
-        $existing = Invoke-BaselineRequest -Uri $uri -Method Head -ResourceUrl 'https://storage.azure.com/'
-        Assert-BaselineBlob $existing $Bytes $hash $uri
-    }
+    Publish-ProvisioningBlob $uri $Bytes 'text/csv; charset=utf-8'
 }
 
 $datasetPath = Join-Path $PSScriptRoot 'dataset\synthetic-it-support-tickets-v1.zip'
@@ -170,7 +86,7 @@ do {
     $uri = "https://$StorageAccountName.blob.core.windows.net/$ContainerName" +
         '?restype=container&comp=list&prefix=dataset-v1%2F'
     if ($marker) { $uri += "&marker=$([uri]::EscapeDataString($marker))" }
-    $response = Invoke-BaselineRequest -Uri $uri -Method Get -ResourceUrl 'https://storage.azure.com/'
+    $response = Invoke-ProvisioningRequest -Uri $uri -Method Get -ResourceUrl 'https://storage.azure.com/'
     # Blob Storage prefixes the listing with a UTF-8 byte-order mark, which [xml] rejects.
     $listing = [xml]([string]$response.Content).TrimStart([char]0xFEFF)
     foreach ($node in $listing.SelectNodes('/EnumerationResults/Blobs/Blob/Name')) {
@@ -237,7 +153,7 @@ $indexer = @{
 function Get-SearchResource([string]$Kind, [string]$Name) {
     $suffix = if ($Kind -eq 'datasources') { '&includeConnectionString=true' } else { '' }
     $uri = "$SearchEndpoint/$Kind('$Name')?api-version=$searchApiVersion$suffix"
-    $response = Invoke-BaselineRequest -Uri $uri -Method Get -ResourceUrl $searchAudience -AcceptStatus 404
+    $response = Invoke-ProvisioningRequest -Uri $uri -Method Get -ResourceUrl $searchAudience -AcceptStatus 404
     if ($response.StatusCode -eq 404) { return $null }
     return $response.Content | ConvertFrom-Json -AsHashtable
 }
@@ -308,7 +224,7 @@ function Ensure-SearchResource([string]$Kind, $Definition) {
     if ($null -eq $existing) {
         $uri = "$SearchEndpoint/$Kind('$($Definition.name)')?api-version=$searchApiVersion"
         $body = [Text.Encoding]::UTF8.GetBytes(($Definition | ConvertTo-Json -Depth 30 -Compress))
-        $response = Invoke-BaselineRequest -Uri $uri -Method Put -ResourceUrl $searchAudience `
+        $response = Invoke-ProvisioningRequest -Uri $uri -Method Put -ResourceUrl $searchAudience `
             -Headers @{ 'If-None-Match' = '*'; Prefer = 'return=representation' } `
             -Body $body -ContentType 'application/json' -AcceptStatus 412
         $created = $response.StatusCode -ne 412
@@ -324,7 +240,7 @@ function Ensure-SearchResource([string]$Kind, $Definition) {
 $indexCreated = Ensure-SearchResource 'indexes' $index
 $countUri = "$SearchEndpoint/indexes('$indexName')/docs/`$count?api-version=$searchApiVersion"
 if (-not $indexCreated -and $null -eq (Get-SearchResource 'indexers' $indexerName)) {
-    $countResponse = Invoke-BaselineRequest -Uri $countUri -Method Get -ResourceUrl $searchAudience
+    $countResponse = Invoke-ProvisioningRequest -Uri $countUri -Method Get -ResourceUrl $searchAudience
     [long]$existingCount = 0
     if (-not [long]::TryParse($countResponse.Content, [ref]$existingCount)) {
         throw 'Baseline Search returned an invalid document count.'
@@ -357,7 +273,7 @@ $lastStatus = 'not started'
 $lastCount = 0
 $lastDiagnostic = 'No indexer result has been reported.'
 for ($poll = 0; $poll -lt 180; $poll++) {
-    $statusResponse = Invoke-BaselineRequest -Uri $statusUri -Method Get -ResourceUrl $searchAudience
+    $statusResponse = Invoke-ProvisioningRequest -Uri $statusUri -Method Get -ResourceUrl $searchAudience
     $status = $statusResponse.Content | ConvertFrom-Json -AsHashtable
     if ($status.status -eq 'error') {
         throw "Baseline indexer is in an error state: $($statusResponse.Content)"
@@ -370,12 +286,12 @@ for ($poll = 0; $poll -lt 180; $poll++) {
             if (-not $lastResult.ContainsKey('itemsFailed') -or $lastResult.itemsFailed -ne 0) {
                 throw "Baseline indexer completed with failures: $($statusResponse.Content)"
             }
-            $countResponse = Invoke-BaselineRequest -Uri $countUri -Method Get -ResourceUrl $searchAudience
+            $countResponse = Invoke-ProvisioningRequest -Uri $countUri -Method Get -ResourceUrl $searchAudience
             if (-not [long]::TryParse($countResponse.Content, [ref]$lastCount)) {
                 throw 'Baseline Search returned an invalid document count.'
             }
             if ($lastCount -ge 100000) {
-                $queryResponse = Invoke-BaselineRequest -Uri $queryUri -Method Post -ResourceUrl $searchAudience `
+                $queryResponse = Invoke-ProvisioningRequest -Uri $queryUri -Method Post -ResourceUrl $searchAudience `
                     -Body $queryBody -ContentType 'application/json'
                 $found = $queryResponse.Content | ConvertFrom-Json -AsHashtable
                 if (@($found.value).Count -eq 1 -and $found.value[0].ticket_id -eq 'TCKT_000001' -and
@@ -387,11 +303,11 @@ for ($poll = 0; $poll -lt 180; $poll++) {
                 # Documents are keyed by ticket_id and merged, so a full re-read cannot duplicate tickets.
                 if (-not $repairRunStarted) {
                     if (-not $repairResetRequested) {
-                        $null = Invoke-BaselineRequest -Uri $resetUri -Method Post -ResourceUrl $searchAudience
+                        $null = Invoke-ProvisioningRequest -Uri $resetUri -Method Post -ResourceUrl $searchAudience
                         $repairResetRequested = $true
                         $repairPriorStart = [string]$lastResult['startTime']
                     }
-                    $runResponse = Invoke-BaselineRequest -Uri $runUri -Method Post -ResourceUrl $searchAudience -AcceptStatus 409
+                    $runResponse = Invoke-ProvisioningRequest -Uri $runUri -Method Post -ResourceUrl $searchAudience -AcceptStatus 409
                     $repairRunStarted = $runResponse.StatusCode -ne 409
                 } elseif ([string]$lastResult['startTime'] -ne $repairPriorStart) {
                     # Allow brief document-count lag before declaring the completed repair incomplete.
@@ -410,7 +326,7 @@ for ($poll = 0; $poll -lt 180; $poll++) {
                 $lastFailure = $fingerprint
                 $failureRetries++
                 Start-Sleep -Seconds 30
-                $null = Invoke-BaselineRequest -Uri $runUri -Method Post -ResourceUrl $searchAudience -AcceptStatus 409
+                $null = Invoke-ProvisioningRequest -Uri $runUri -Method Post -ResourceUrl $searchAudience -AcceptStatus 409
             }
         }
     }

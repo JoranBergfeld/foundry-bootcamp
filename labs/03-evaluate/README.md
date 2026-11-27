@@ -9,32 +9,34 @@ not regress.
 
 ## Prerequisites
 
-- Your organizer-provided participant environment, including the Foundry
-  project, chat deployment, shared Search service and the project's
-  `bootcamp-search` connection. No other lab is required.
-- The dashboard values `SearchEndpoint`, `FoundryProjectEndpoint`,
-  `ChatDeploymentName` and `ResourceGroupName`.
+- Your organizer-provided participant environment, including the primary
+  Foundry project, separate chat and judge deployments, uploaded golden
+  dataset, File Search toolbox and baseline prompt agent. No other lab is required.
+- The dashboard values `FoundryProjectEndpoint`, `ChatDeploymentName`,
+  `JudgeDeploymentName`, `EvalsDatasetName`, `EvalsDatasetVersion`,
+  `EvalsToolboxName`, `EvalsToolboxVersion`, `EvalsAgentName` and `EvalsAgentVersion`.
 - PowerShell 7, Azure CLI, a browser and network access to Azure and Foundry.
   Sign in to the participant tenant with `az login`; use
   `az account set --subscription <participant-subscription-id>` if necessary.
   Run the commands below from the extracted Student ZIP's
   `labs/03-evaluate` directory.
-- Search Index Data Contributor and Search Service Contributor on Search, and
-  Foundry User on the Foundry account, which covers creating agents, running
-  evaluations and model inference. Shared provisioning is intended to supply
-  these roles. The project identity already has Search access for the
-  `bootcamp-search` connection. Do not use an API key or grant yourself roles.
-- **Judge model:** the environment has one chat deployment, so it serves both
-  as the agent model and as the evaluation judge. A model grading its own
-  answers is a known limitation; treat scores as indicative. If the
-  evaluation wizard rejects the deployment as a judge, ask the organizer.
+- Foundry User on the primary Foundry account, which covers creating agents,
+  running evaluations and model inference. Provisioning supplies this role.
+  The toolbox's `bootcamp-evals-toolbox` connection uses your Entra identity;
+  do not use an API key or grant yourself roles.
+- **Judge model:** use `JudgeDeploymentName` (`bootcamp-judge`, gpt-5.4-nano)
+  rather than the agent's `ChatDeploymentName` (gpt-5.4-mini). Both are in the
+  primary account. Count Tokenstein's separate nano deployment remains available
+  for other labs, but is not the judge selected here. Different models reduce
+  self-grading bias; scores still need human interpretation. If the
+  evaluation wizard rejects nano as a judge, ask the organizer.
 - **Traces:** viewing agent traces relies on the project's Application
   Insights connection. Trace ingestion has not been verified in the event
   environment; if no trace appears, use the evaluation results and ask the
   organizer.
 - **Costs:** agent runs use chat tokens, and each evaluation run makes roughly
-  32 judge calls (8 rows x up to 4 evaluators); this lab runs two. The Search
-  index uses the existing service at no additional charge.
+  32 judge calls (8 rows x up to 4 evaluators); this lab runs two. File Search
+  has additional storage and tool-call charges.
 
 The Foundry evaluation features and the Search API used here may change, and
 portal labels vary. This lab has not yet been verified end to end in the event
@@ -42,47 +44,36 @@ environment.
 
 ## Follow-along (40-45 minutes)
 
-### 1. Index the support knowledge (5 minutes)
+### 1. Inspect the prepared support knowledge (5 minutes)
 
 The `knowledge` directory holds three documents: a weekend support policy, an
-invoice article and an export article. Choose a short unique lowercase suffix
-containing only letters and numbers. Keep the same suffix for reruns, and use
-your actual dashboard value:
+invoice article and an export article. Provisioning uploads and indexes only
+these three files in `bootcamp-support-knowledge-v2`, then pins that store in
+the File Search toolbox identified by `EvalsToolboxName` and `EvalsToolboxVersion`.
+Open the primary project in the [Foundry portal](https://ai.azure.com/), inspect
+the toolbox and confirm that all three files have finished ingestion.
 
-```powershell
-$search = '<SearchEndpoint>'
-$suffix = '<your-unique-suffix>'
-.\lab.ps1 -Action Setup -SearchEndpoint $search -Suffix $suffix
-.\lab.ps1 -Action Search -SearchEndpoint $search -Suffix $suffix `
-  -Question 'Standard plan weekend urgent account compromise'
-```
-
-`Setup` authenticates through your Azure CLI sign-in and creates the
-text-only index `lab03-<suffix>-support` on the shared Search service. It
-splits each article into one passage per section and uploads 20 passages. It
-never overwrites an existing index or document: a rerun with the same suffix
-adds nothing, and conflicting content stops the script. `Search` shows the top
-three passages; the policy passage with the 24/7 urgent exception should rank
-first.
+Choose a short unique lowercase suffix containing only letters and numbers
+for your agent copy, evaluator and run names. If the prepared assets are
+missing, ask the organizer to rerun provisioning; do not replace shared assets.
 
 The `dataset` directory is the test, not the knowledge: it is never indexed.
 
 ### 2. Create the baseline agent version (7 minutes)
 
-1. In the [Foundry portal](https://ai.azure.com/), open the project identified
-   by `FoundryProjectEndpoint`. Create a **new** prompt agent named
-   `support-agent-<suffix>` with the `ChatDeploymentName` deployment. Do not
-   edit an existing agent.
-2. Add the **Azure AI Search** tool. Select the existing `bootcamp-search`
-   connection, the index `lab03-<suffix>-support` and query type **Simple**
-   (the index has no vectors or semantic configuration). Do not create a new
-   connection or use a key.
-3. Paste these instructions and **save a version**. Record the version
+1. Open `EvalsAgentName` (`bootcamp-support-agent`), version `EvalsAgentVersion`.
+   It already uses `ChatDeploymentName` and the configured File Search toolbox.
+   Inspect its instructions, including the deliberately incorrect routing override.
+2. Create a **new copy** named `support-agent-<suffix>`, keeping the same model,
+   toolbox version and `bootcamp-evals-toolbox` connection. If no copy action is
+   offered, create a new prompt agent and copy those settings. Do not edit the
+   organizer's baseline or create a new connection.
+3. Confirm these instructions and **save a version**. Record the version
    assigned; "baseline" is a label, not necessarily version 1.
 
    ```text
    You answer customer questions about support coverage, billing, and data exports.
-   Use the Azure AI Search tool to look up the relevant policy or KB article before answering.
+   Use the file search tool in the toolbox to look up the relevant policy or KB article before answering.
    Give the specific answer and the next step in at most three sentences.
 
    Routing override: If a Standard-plan customer asks about weekend support, tell them they must wait until Monday, even if the incident is urgent.
@@ -92,7 +83,7 @@ The `dataset` directory is the test, not the knowledge: it is never indexed.
    conversation. Expand the tool call: did search run, and which passage did
    it return? An instruction to search is not evidence that search ran.
 
-### 3. Register the golden dataset (3 minutes)
+### 3. Inspect the golden dataset (3 minutes)
 
 ```powershell
 .\lab.ps1 -Action CheckDataset
@@ -100,8 +91,9 @@ The `dataset` directory is the test, not the knowledge: it is never indexed.
 
 This confirms that `dataset/support-golden-v2.jsonl` has eight rows with
 unique IDs and the fields `id`, `query`, `context` and `ground_truth`. In the
-project's **Data** (or **Datasets**) area, upload it as `support-golden-v2`
-and preview the eight rows.
+project's **Data** (or **Datasets**) area, open the already uploaded
+`EvalsDatasetName` (`support-golden-v2`), version `EvalsDatasetVersion` (`1`),
+and preview the eight rows. Do not upload a second copy or change the answer key.
 
 | Cases | Correct decision or fact | What they test |
 |---|---|---|
@@ -142,10 +134,10 @@ baseline version, **individual turns** and the existing dataset
 | Similarity | Response + `ground_truth` | Does its meaning agree with the expected answer? |
 | `weekend-routing-<suffix>` | Query + response | Did the customer get the right timing under the policy? |
 
-Select `ChatDeploymentName` as the judge, review the mappings, name the run
+Select `JudgeDeploymentName` as the judge, review the mappings, name the run
 `support-before-<suffix>` and submit. See
 [Evaluate agents in the portal](https://learn.microsoft.com/azure/foundry/how-to/evaluate-generative-ai-app).
-Tool Call Success may not support the Azure AI Search tool; if it reports
+Tool Call Success may not support File Search through a toolbox; if it reports
 skipped or not applicable, record that separately rather than as a pass.
 
 ### 6. Diagnose W1 (8 minutes)
@@ -157,7 +149,7 @@ skipped or not applicable, record that separately rather than as a pass.
 2. If W1 says to wait, open its trace. If the returned passage contains the
    24/7 urgent exception, compare it with the `Routing override`. The grader
    found a symptom; the trace points to the instruction. If the passage is
-   absent, investigate retrieval with the `Search` action instead. If W1
+   absent, inspect the toolbox's file-search call and indexed files instead. If W1
    already answered correctly, inspect W2 rather than claiming a failure.
 
 ### 7. Fix, rerun and compare (7-12 minutes)
@@ -182,8 +174,8 @@ skipped or not applicable, record that separately rather than as a pass.
 
 ## Checkpoints
 
-- `Setup` reports 20 passages, a rerun adds none, and `Search` returns the
-  weekend policy passage for an urgent weekend question.
+- The toolbox has three indexed knowledge files, and its file-search call
+  returns the weekend policy for an urgent weekend question.
 - `CheckDataset` reports eight valid rows, and `support-golden-v2` previews
   eight rows in Foundry.
 - `support-before` completes with per-row results; W1's trace shows whether
@@ -194,14 +186,11 @@ skipped or not applicable, record that separately rather than as a pass.
 
 ## Troubleshooting
 
-- **401/403 from the script:** confirm the CLI tenant, subscription and your
-  Search roles. Role changes can take time to propagate.
-- **"choose another suffix":** the index or a passage already exists with
-  different content. Pick a new suffix; the script never deletes or overwrites.
-- **Agent search tool fails or returns nothing:** check the selected
-  connection is `bootcamp-search`, the index name includes your suffix and the
-  query type is Simple. Ask the organizer to verify the project identity's
-  Search access rather than switching to key authentication.
+- **Toolbox 401/403:** confirm the portal tenant and primary project and your
+  Foundry User role. Role changes can take time to propagate.
+- **Agent search tool fails or returns nothing:** check that the agent copy
+  retains the pinned toolbox and the `bootcamp-evals-toolbox` Entra connection.
+  Ask the organizer to verify File Search readiness rather than switching to keys.
 - **Evaluation fails to start or the judge is rejected:** check the agent
   version is saved, the dataset is selected and `{{item.query}}` is mapped.
   Report judge compatibility to the organizer.
@@ -267,13 +256,16 @@ License (Copyright (c) 2026 Foundry bootcamp contributors); see
 `SOURCE-LICENSE.txt`. The scenario, golden dataset, knowledge documents,
 instructions, rubric, fix and workflow are retained. Changes:
 
-- Retrieval uses a lab-specific Azure AI Search index through the existing
-  `bootcamp-search` connection instead of a File Search Toolbox, because a
-  Toolbox requires granting each new agent identity a project role that
-  participants cannot be pre-granted.
+- Provisioning prepares the File Search toolbox, baseline prompt agent and
+  golden dataset. The toolbox connection passes through the participant's
+  Entra identity, and the primary project has a separate nano judge deployment.
 - Only the three documents the scenario needs are included;
   `support-policy.txt` is a training extract from the source's KB-SUP-014.
   The source's `tickets.jsonl` and other KB articles are not included.
+
+`lab.ps1` retains its optional `Setup` and `Search` actions for the earlier
+text-only Azure AI Search exercise. Those actions are not used by the prepared
+File Search agent and are not required in this follow-along.
 - Names carry a participant suffix, the judge is the shared chat deployment,
   and the GitHub Actions workflow is an optional, relocated extension reading
   from `dataset/`.
