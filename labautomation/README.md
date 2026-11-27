@@ -66,9 +66,9 @@ The RG-scoped `foundry-core.bicep` declares these choices, using the stable
 
 | Resource | Choice |
 |---|---|
-| Primary Foundry account | `AIServices`, S0, stable `foundry-<RG-derived uniqueString>` name |
-| Secondary Foundry account | `AIServices`, S0, stable `foundry-alt-<RG-derived uniqueString>` name |
-| Projects | `bootcamp`, one non-hub project in each account; original lab project/endpoints retained |
+| Primary Foundry account | **Sir Prompts-a-Lot**: `AIServices`, S0, `foundry-sir-prompts-a-lot-<RG-derived uniqueString>` |
+| Secondary Foundry account | **Count Tokenstein**: `AIServices`, S0, `foundry-count-tokenstein-<RG-derived uniqueString>` |
+| Projects | `bootcamp`, one non-hub project per account, with matching display names; original lab project/endpoints retained |
 | Chat | Deployment `bootcamp-chat`; OpenAI `gpt-5.4-mini`, version `2026-03-17`; GlobalStandard; capacity **10** |
 | Embedding | Deployment `bootcamp-embedding`; OpenAI `text-embedding-3-small`, version `1`; GlobalStandard; capacity **10**; default **1536** dimensions |
 | Secondary chat | Deployment `bootcamp-chat-nano`; OpenAI `gpt-5.4-nano`, version `2026-03-17`; GlobalStandard; capacity **10** |
@@ -80,6 +80,21 @@ The original chat and embedding models were deployed in a Sweden Central MicroHa
 This does not establish availability or quota in other subscriptions, regions
 or subsequent events. The new secondary model requires event-subscription preflight;
 reserve capacity for two accounts and three deployments per participant.
+
+The playful account-name prefixes are fixed; the resource-group-derived suffix
+keeps the Azure names and endpoint subdomains unique across participant
+environments. Azure cannot rename an existing account in place. On reruns the
+hook inventories Cognitive Services accounts and retains the original
+`foundry-<suffix>` and `foundry-alt-<suffix>` names if they already exist;
+their projects still receive the new display names. If both the old and new
+name for either account exist, provisioning fails rather than silently switching
+participants between accounts. An organizer must resolve the ambiguity without
+deleting participant work.
+
+For direct template deployments, supply the required
+`existingFoundryAccountNames` array with all Cognitive Services account names
+in the target resource group (or `[]` for a new group). Omitting existing names
+would select new resources instead of retaining the existing accounts.
 
 As checked on 2026-11-25, the Microsoft retirement schedule lists the chat model
 as GA through 2027-09-21 and the embedding model as GA through 2028-02-09.

@@ -64,6 +64,14 @@ try {
 
 $group = Get-AzResourceGroup | Where-Object { $_.ResourceGroupName -eq $ResourceGroupName }
 $resources = @(if ($group) { Get-AzResource -ResourceGroupName $ResourceGroupName })
+$existingFoundryAccountNames = @($resources | Where-Object {
+    $_.ResourceType -eq 'Microsoft.CognitiveServices/accounts'
+} | ForEach-Object {
+    if ([string]::IsNullOrWhiteSpace($_.Name)) {
+        throw 'Foundry account inventory contains a resource without a name.'
+    }
+    $_.Name
+})
 $existingStorageAccountTags = @{}
 foreach ($resource in $resources) {
     if ($resource.ResourceType -ne 'Microsoft.Storage/storageAccounts') { continue }
@@ -80,6 +88,7 @@ $parameters = @{
     participantObjectIds = $AllowedEntraUserIds
     provisionerObjectId = $provisionerId.ToString()
     existingStorageAccountTags = $existingStorageAccountTags
+    existingFoundryAccountNames = $existingFoundryAccountNames
 }
 
 # The MicroHack helper can delete the entire RG on recycle, including same-region retries.

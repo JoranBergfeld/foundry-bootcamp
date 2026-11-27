@@ -174,7 +174,8 @@ Describe 'MicroHack Foundry provisioning hook' {
             ($PreferredLocations -join ',') -eq 'region-first,region-second' -and
             $ResourceGroupName -eq 'participant' -and
             $RgOwnerEntraObjectIds[0] -eq '00000000-0000-0000-0000-000000000002' -and
-            $TemplateParameterObject.participantObjectIds[0] -eq '00000000-0000-0000-0000-000000000002'
+            $TemplateParameterObject.participantObjectIds[0] -eq '00000000-0000-0000-0000-000000000002' -and
+            $TemplateParameterObject.existingFoundryAccountNames.Count -eq 0
         }
         $credentials.Count | Should -Be 13
         $values = @{}
@@ -198,15 +199,30 @@ Describe 'MicroHack Foundry provisioning hook' {
     }
 
     It 'never calls destructive fallback on a populated RG even with organizer opt-in' {
-        Mock Get-AzResource { @{ ResourceType = 'Microsoft.CognitiveServices/accounts'; Location = 'region-first' } }
+        Mock Get-AzResource {
+            @(
+                @{ ResourceType = 'Microsoft.CognitiveServices/accounts'; Name = 'foundry-abcdefghijklm' }
+                @{ ResourceType = 'Microsoft.CognitiveServices/accounts'; Name = 'foundry-alt-abcdefghijklm' }
+            )
+        }
         $credentials = @(& $script:Hook @script:Inputs)
         Should -Invoke Invoke-MhhDeploymentWithRegionFallback -Times 0
         Should -Invoke New-AzResourceGroupDeployment -Times 1 -Exactly -ParameterFilter {
             $Mode -eq 'Incremental' -and $ResourceGroupName -eq 'participant' -and
-            $TemplateParameterObject.location -eq 'region-first'
+            $TemplateParameterObject.location -eq 'region-first' -and
+            $TemplateParameterObject.existingFoundryAccountNames.Count -eq 2 -and
+            'foundry-abcdefghijklm' -in $TemplateParameterObject.existingFoundryAccountNames -and
+            'foundry-alt-abcdefghijklm' -in $TemplateParameterObject.existingFoundryAccountNames
         }
         ($credentials | Where-Object { $_.HackboxCredential.name -eq 'Region' }).HackboxCredential.value |
             Should -Be 'region-first'
+    }
+
+    It 'fails before deployment when a Foundry account inventory entry has no name' {
+        Mock Get-AzResource { @{ ResourceType = 'Microsoft.CognitiveServices/accounts'; Name = '' } }
+        { & $script:Hook @script:Inputs } | Should -Throw '*Foundry account inventory*without a name*'
+        Should -Invoke New-AzResourceGroupDeployment -Times 0
+        Should -Invoke Invoke-MhhDeploymentWithRegionFallback -Times 0
     }
 
     It 'keeps an existing RG in its own region when that region is a supplied preference' {
@@ -721,6 +737,8 @@ Describe 'MicroHack Foundry provisioning hook' {
         $project = @($arm.resources | Where-Object type -eq 'Microsoft.CognitiveServices/accounts/projects')
         $project.Count | Should -Be 2
         foreach ($item in $project) { $item.identity.type | Should -Be 'SystemAssigned' }
+        @($project | Where-Object { $_.properties.displayName -eq 'Sir Prompts-a-Lot' }).Count | Should -Be 1
+        @($project | Where-Object { $_.properties.displayName -eq 'Count Tokenstein' }).Count | Should -Be 1
         $grant = @(Get-RoleGrants $arm | Where-Object Role -Match '53ca6127-db72-4b80-b1b0-d745d6d5456d')
         $grant.Count | Should -Be 2
         foreach ($item in $grant) {
@@ -732,6 +750,25 @@ Describe 'MicroHack Foundry provisioning hook' {
         $arm.outputs.FoundryProjectEndpoint.type | Should -Be 'string'
         $arm.outputs.SecondaryFoundryProjectEndpoint.value | Should -Match 'secondaryAccountName'
         $arm.parameters.location.defaultValue | Should -Be '[resourceGroup().location]'
+    }
+
+    It 'selects distinctive names for new accounts while retaining legacy names and rejecting ambiguity' {
+        $arm = (Get-CompiledCore).Arm
+        $arm.parameters.existingFoundryAccountNames.Keys | Should -Not -Contain 'defaultValue'
+        $arm.variables.existingFoundryNames | Should -Match "toLower\(lambdaVariables\('name'\)\)"
+        foreach ($choice in @(
+            @{ Variable = 'accountName'; Legacy = 'legacyAccountName'; LegacyPrefix = 'foundry'; Named = 'namedAccountName'; Prefix = 'foundry-sir-prompts-a-lot'; Label = 'primary' }
+            @{ Variable = 'secondaryAccountName'; Legacy = 'legacySecondaryAccountName'; LegacyPrefix = 'foundry-alt'; Named = 'namedSecondaryAccountName'; Prefix = 'foundry-count-tokenstein'; Label = 'secondary' }
+        )) {
+            $arm.variables[$choice.Legacy] | Should -Match "format\('$($choice.LegacyPrefix)-\{0\}', variables\('suffix'\)\)"
+            $arm.variables[$choice.Named] | Should -Match "format\('$($choice.Prefix)-\{0\}', variables\('suffix'\)\)"
+            $expression = $arm.variables[$choice.Variable]
+            $legacy = [regex]::Escape("variables('$($choice.Legacy)')")
+            $named = [regex]::Escape("variables('$($choice.Named)')")
+            $existing = [regex]::Escape("variables('existingFoundryNames')")
+            $expression | Should -Match "if\(and\(contains\($existing, $legacy\), contains\($existing, $named\)\), fail\('Both $($choice.Label)"
+            $expression | Should -Match "if\(contains\($existing, $legacy\), $legacy, $named\)"
+        }
     }
 
     It 'adds keyless AI Search and Storage with a reusable baseline container' {

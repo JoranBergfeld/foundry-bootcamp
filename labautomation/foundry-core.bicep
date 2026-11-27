@@ -14,8 +14,21 @@ param provisionerObjectId string
 @description('Existing Storage tags by account name, supplied by the provisioning hook on reruns.')
 param existingStorageAccountTags object = {}
 
-var accountName = 'foundry-${uniqueString(resourceGroup().id)}'
-var secondaryAccountName = 'foundry-alt-${uniqueString(resourceGroup().id)}'
+@description('Names of existing Cognitive Services accounts in the resource group, supplied by the provisioning hook.')
+param existingFoundryAccountNames array
+
+var suffix = uniqueString(resourceGroup().id)
+var existingFoundryNames = map(existingFoundryAccountNames, name => toLower(name))
+var legacyAccountName = 'foundry-${suffix}'
+var namedAccountName = 'foundry-sir-prompts-a-lot-${suffix}'
+var legacySecondaryAccountName = 'foundry-alt-${suffix}'
+var namedSecondaryAccountName = 'foundry-count-tokenstein-${suffix}'
+var accountName = contains(existingFoundryNames, legacyAccountName) && contains(existingFoundryNames, namedAccountName)
+  ? fail('Both primary Foundry account names exist. An organizer must resolve the ambiguity before provisioning.')
+  : contains(existingFoundryNames, legacyAccountName) ? legacyAccountName : namedAccountName
+var secondaryAccountName = contains(existingFoundryNames, legacySecondaryAccountName) && contains(existingFoundryNames, namedSecondaryAccountName)
+  ? fail('Both secondary Foundry account names exist. An organizer must resolve the ambiguity before provisioning.')
+  : contains(existingFoundryNames, legacySecondaryAccountName) ? legacySecondaryAccountName : namedSecondaryAccountName
 var projectName = 'bootcamp'
 var mcpEnvironmentName = 'mcp-env-${uniqueString(resourceGroup().id)}'
 var mcpAppName = 'mcp-time-${uniqueString(resourceGroup().id)}'
@@ -59,7 +72,7 @@ resource project 'Microsoft.CognitiveServices/accounts/projects@2025-06-01' = {
     type: 'SystemAssigned'
   }
   properties: {
-    displayName: 'Winter Bootcamp'
+    displayName: 'Sir Prompts-a-Lot'
     description: 'One participant project shared by all six independent labs.'
   }
 }
@@ -142,7 +155,7 @@ resource secondaryProject 'Microsoft.CognitiveServices/accounts/projects@2025-06
     type: 'SystemAssigned'
   }
   properties: {
-    displayName: 'Winter Bootcamp - alternate model'
+    displayName: 'Count Tokenstein'
     description: 'Independent Foundry with a smaller chat model, without the shared lab tools.'
   }
 }
