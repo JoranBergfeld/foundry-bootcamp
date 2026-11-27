@@ -15,7 +15,10 @@ param provisionerObjectId string
 param existingStorageAccountTags object = {}
 
 var accountName = 'foundry-${uniqueString(resourceGroup().id)}'
+var secondaryAccountName = 'foundry-alt-${uniqueString(resourceGroup().id)}'
 var projectName = 'bootcamp'
+var mcpEnvironmentName = 'mcp-env-${uniqueString(resourceGroup().id)}'
+var mcpAppName = 'mcp-time-${uniqueString(resourceGroup().id)}'
 var searchName = 'srch-${uniqueString(resourceGroup().id)}'
 var storageName = 'st${uniqueString(resourceGroup().id)}'
 var logsName = 'log-${uniqueString(resourceGroup().id)}'
@@ -106,6 +109,67 @@ resource embedding 'Microsoft.CognitiveServices/accounts/deployments@2025-06-01'
 resource participantAccess 'Microsoft.Authorization/roleAssignments@2022-04-01' = [for participantId in union(participantObjectIds, []): {
   name: guid(account.id, participantId, azureAiUserRoleId)
   scope: account
+  properties: {
+    roleDefinitionId: azureAiUserRoleId
+    principalId: participantId
+    principalType: 'User'
+  }
+}]
+
+resource secondaryAccount 'Microsoft.CognitiveServices/accounts@2025-06-01' = {
+  name: secondaryAccountName
+  location: location
+  kind: 'AIServices'
+  sku: {
+    name: 'S0'
+  }
+  identity: {
+    type: 'SystemAssigned'
+  }
+  properties: {
+    allowProjectManagement: true
+    customSubDomainName: secondaryAccountName
+    disableLocalAuth: true
+    publicNetworkAccess: 'Enabled'
+  }
+}
+
+resource secondaryProject 'Microsoft.CognitiveServices/accounts/projects@2025-06-01' = {
+  parent: secondaryAccount
+  name: projectName
+  location: location
+  identity: {
+    type: 'SystemAssigned'
+  }
+  properties: {
+    displayName: 'Winter Bootcamp - alternate model'
+    description: 'Independent Foundry with a smaller chat model, without the shared lab tools.'
+  }
+}
+
+resource secondaryChat 'Microsoft.CognitiveServices/accounts/deployments@2025-06-01' = {
+  parent: secondaryAccount
+  name: 'bootcamp-chat-nano'
+  sku: {
+    name: 'GlobalStandard'
+    capacity: 10
+  }
+  properties: {
+    model: {
+      format: 'OpenAI'
+      name: 'gpt-5.4-nano'
+      version: '2026-03-17'
+    }
+    versionUpgradeOption: 'NoAutoUpgrade'
+  }
+  dependsOn: [
+    secondaryProject
+  ]
+}
+
+resource secondaryParticipantAccess 'Microsoft.Authorization/roleAssignments@2022-04-01' = [for participantId in union(participantObjectIds, []): {
+  name: guid(secondaryAccount.id, participantId, azureAiUserRoleId)
+  scope: secondaryAccount
   properties: {
     roleDefinitionId: azureAiUserRoleId
     principalId: participantId
@@ -353,9 +417,142 @@ resource searchConnection 'Microsoft.CognitiveServices/accounts/projects/connect
   }
 }
 
+resource mcpEnvironment 'Microsoft.App/managedEnvironments@2025-01-01' = {
+  name: mcpEnvironmentName
+  location: location
+  properties: {
+    appLogsConfiguration: {
+      destination: 'azure-monitor'
+    }
+    workloadProfiles: [
+      {
+        name: 'Consumption'
+        workloadProfileType: 'Consumption'
+      }
+    ]
+  }
+}
+
+resource mcpDiagnostics 'Microsoft.Insights/diagnosticSettings@2021-05-01-preview' = {
+  name: 'bootcamp-mcp-logs'
+  scope: mcpEnvironment
+  properties: {
+    workspaceId: logs.id
+    logs: [
+      {
+        categoryGroup: 'allLogs'
+        enabled: true
+      }
+    ]
+  }
+}
+
+resource mcpApp 'Microsoft.App/containerApps@2025-01-01' = {
+  name: mcpAppName
+  location: location
+  properties: {
+    managedEnvironmentId: mcpEnvironment.id
+    workloadProfileName: 'Consumption'
+    configuration: {
+      activeRevisionsMode: 'Single'
+      ingress: {
+        external: true
+        targetPort: 8000
+        transport: 'http'
+        allowInsecure: false
+      }
+    }
+    template: {
+      containers: [
+        {
+          name: 'date-time'
+          image: 'python:3.12.12-slim'
+          command: [
+            '/bin/sh'
+            '-c'
+          ]
+          // Embed the packaged server so MicroHack needs no separate image build or registry.
+          args: [
+            'set -e\npip install --no-cache-dir --disable-pip-version-check -r /dev/stdin <<\'REQUIREMENTS\'\n${loadTextContent('mcp-time/requirements.txt')}\nREQUIREMENTS\nexec python -u -c "$MCP_SERVER_SOURCE"'
+          ]
+          env: [
+            {
+              name: 'MCP_SERVER_SOURCE'
+              value: loadTextContent('mcp-time/server.py')
+            }
+          ]
+          resources: {
+            cpu: json('0.25')
+            memory: '0.5Gi'
+          }
+          probes: [
+            {
+              type: 'Startup'
+              httpGet: {
+                path: '/healthz'
+                port: 8000
+              }
+              periodSeconds: 10
+              failureThreshold: 30
+            }
+            {
+              type: 'Readiness'
+              httpGet: {
+                path: '/healthz'
+                port: 8000
+              }
+              periodSeconds: 10
+            }
+            {
+              type: 'Liveness'
+              httpGet: {
+                path: '/healthz'
+                port: 8000
+              }
+              periodSeconds: 30
+            }
+          ]
+        }
+      ]
+      scale: {
+        minReplicas: 0
+        maxReplicas: 1
+        rules: [
+          {
+            name: 'http'
+            http: {
+              metadata: {
+                concurrentRequests: '10'
+              }
+            }
+          }
+        ]
+      }
+    }
+  }
+}
+
+resource mcpConnection 'Microsoft.CognitiveServices/accounts/projects/connections@2025-09-01' = {
+  parent: project
+  name: 'bootcamp-date-time'
+  properties: {
+    category: 'RemoteTool'
+    authType: 'None'
+    target: 'https://${mcpApp.properties.configuration.ingress.fqdn}/mcp'
+    isSharedToAll: true
+    metadata: {
+      type: 'generic_mcp'
+    }
+  }
+}
+
 output FoundryProjectEndpoint string = uri(account.properties.endpoints['AI Foundry API'], 'api/projects/${project.name}')
 output ChatDeploymentName string = chat.name
 output EmbeddingDeploymentName string = embedding.name
+output SecondaryFoundryProjectEndpoint string = uri(secondaryAccount.properties.endpoints['AI Foundry API'], 'api/projects/${secondaryProject.name}')
+output SecondaryChatDeploymentName string = secondaryChat.name
+output McpServerUrl string = mcpConnection.properties.target
+output McpConnectionName string = mcpConnection.name
 output SearchEndpoint string = 'https://${search.name}.search.windows.net'
 output StorageAccountName string = storage.name
 output StorageBaselineContainerName string = baselineContainer.name

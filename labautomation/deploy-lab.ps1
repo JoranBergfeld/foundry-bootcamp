@@ -161,7 +161,8 @@ if ($env:BOOTCAMP_ORGANIZER_INITIAL_PROVISIONING -ceq 'true' -and $resources.Cou
 
 $requiredOutputs = @(
     'FoundryProjectEndpoint', 'ChatDeploymentName', 'EmbeddingDeploymentName',
-    'SearchEndpoint', 'StorageAccountName', 'StorageBaselineContainerName'
+    'SearchEndpoint', 'StorageAccountName', 'StorageBaselineContainerName',
+    'SecondaryFoundryProjectEndpoint', 'SecondaryChatDeploymentName', 'McpServerUrl', 'McpConnectionName'
 )
 foreach ($key in $requiredOutputs) {
     if (-not $coreDeployment.Outputs.ContainsKey($key) -or [string]::IsNullOrWhiteSpace($coreDeployment.Outputs[$key])) {
@@ -188,6 +189,10 @@ $credentialValues = [ordered]@{
     FoundryProjectEndpoint = $coreDeployment.Outputs.FoundryProjectEndpoint
     ChatDeploymentName = $coreDeployment.Outputs.ChatDeploymentName
     EmbeddingDeploymentName = $coreDeployment.Outputs.EmbeddingDeploymentName
+    SecondaryFoundryProjectEndpoint = $coreDeployment.Outputs.SecondaryFoundryProjectEndpoint
+    SecondaryChatDeploymentName = $coreDeployment.Outputs.SecondaryChatDeploymentName
+    McpServerUrl = $coreDeployment.Outputs.McpServerUrl
+    McpConnectionName = $coreDeployment.Outputs.McpConnectionName
     SearchEndpoint = $coreDeployment.Outputs.SearchEndpoint
     StorageAccountName = $coreDeployment.Outputs.StorageAccountName
     StorageBaselineContainerName = $coreDeployment.Outputs.StorageBaselineContainerName
