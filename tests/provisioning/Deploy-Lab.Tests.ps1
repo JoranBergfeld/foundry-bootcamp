@@ -48,6 +48,31 @@ BeforeAll {
 }
 
 Describe 'Shared baseline dataset' {
+    It 'packages evaluation inputs and their license byte-for-byte from the participant lab' {
+        $source = Join-Path $PSScriptRoot '..\..\labs\03-evaluate'
+        $archive = [IO.Compression.ZipFile]::OpenRead(
+            (Join-Path $PSScriptRoot '..\..\labautomation\dataset\support-evals-v2.zip'))
+        try {
+            $expected = @('SOURCE-LICENSE.txt', 'dataset/support-golden-v2.jsonl') +
+                @(Get-ChildItem (Join-Path $source 'knowledge') -File | ForEach-Object { "knowledge/$($_.Name)" })
+            $archive.Entries.FullName | Sort-Object | Should -Be ($expected | Sort-Object)
+            foreach ($path in $expected) {
+                $stream = $archive.GetEntry($path).Open()
+                $buffer = [IO.MemoryStream]::new()
+                try {
+                    $stream.CopyTo($buffer)
+                    [Convert]::ToHexString([Security.Cryptography.SHA256]::HashData($buffer.ToArray())) |
+                        Should -Be (Get-FileHash (Join-Path $source $path) -Algorithm SHA256).Hash
+                } finally {
+                    $stream.Dispose()
+                    $buffer.Dispose()
+                }
+            }
+        } finally {
+            $archive.Dispose()
+        }
+    }
+
     It 'provides the complete verified dataset without a Kaggle download' {
         $path = Join-Path $PSScriptRoot '..\..\labautomation\dataset\synthetic-it-support-tickets-v1.zip'
         $path | Should -Exist
@@ -789,6 +814,31 @@ Describe 'MicroHack Foundry provisioning hook' {
         $agent.definition.tools[0].project_connection_id | Should -Be 'bootcamp-evals-toolbox'
         $state.Foundry.Connections['bootcamp-evals-toolbox'].properties.authType | Should -Be 'UserEntraToken'
         $state.Foundry.Connections['bootcamp-evals-toolbox'].properties.audience | Should -Be 'https://ai.azure.com'
+    }
+
+    It 'provisions evaluation assets from the isolated MicroHack lab directory without sibling participant labs' {
+        $runner = Join-Path $TestDrive 'microhack'
+        $null = New-Item -ItemType Directory -Path $runner -Force
+        Copy-Item (Join-Path $PSScriptRoot '..\..\labautomation') (Join-Path $runner 'lab') -Recurse
+        (Join-Path $runner 'labs') | Should -Not -Exist
+
+        $assets = & (Join-Path $runner 'lab\provision-evals.ps1') `
+            -ProjectEndpoint 'https://foundry.example/api/projects/bootcamp' `
+            -ProjectResourceId '/subscriptions/sub/resourceGroups/participant/providers/Microsoft.CognitiveServices/accounts/foundry/projects/bootcamp' `
+            -ChatDeploymentName 'bootcamp-chat' -StorageAccountName 'stexample' -ContainerName 'baseline'
+
+        $assets.EvalsDatasetName | Should -Be 'support-golden-v2'
+        $state = $global:ProvisioningTestDataPlane
+        $source = Join-Path $PSScriptRoot '..\..\labs\03-evaluate'
+        $state.Blobs['/baseline/evals/support-golden-v2.jsonl'].Content |
+            Should -BeExactly ([IO.File]::ReadAllText((Join-Path $source 'dataset\support-golden-v2.jsonl')))
+        $state.Foundry.Files.Count | Should -Be 3
+        foreach ($file in Get-ChildItem (Join-Path $source 'knowledge') -File) {
+            $uploaded = @($state.Foundry.Files.Values | Where-Object { $_.filename.EndsWith("-$($file.Name)") })
+            $uploaded | Should -HaveCount 1
+            $uploaded[0].Content | Should -BeExactly ([IO.File]::ReadAllText($file.FullName))
+        }
+        $state.Foundry.Stores[$assets.EvalsVectorStoreId].file_ids | Should -HaveCount 3
     }
 
     It 'reuses the pinned baseline through paginated listings and preserves participant agent and toolbox versions' {

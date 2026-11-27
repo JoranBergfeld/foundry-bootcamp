@@ -232,6 +232,19 @@ All role assignments use stable resource/principal/role-derived names.
 After baseline indexing succeeds, `provision-evals.ps1` prepares these assets in
 the **primary** project:
 
+MicroHack stages `labautomation` as the runner's `lab` directory without the
+sibling participant `labs` directory. Evaluation provisioning therefore reads
+the self-contained `dataset/support-evals-v2.zip`, not participant file paths.
+The archive contains the golden dataset, three knowledge files and their MIT
+license, copied byte-for-byte from Lab 03. When those sources change, regenerate
+the archive from the repository root and run the provisioning tests to check
+source/archive parity:
+
+```powershell
+Compress-Archive -Path .\labs\03-evaluate\dataset, .\labs\03-evaluate\knowledge, .\labs\03-evaluate\SOURCE-LICENSE.txt -DestinationPath .\labautomation\dataset\support-evals-v2.zip -Force
+Invoke-Pester .\tests\provisioning\Deploy-Lab.Tests.ps1
+```
+
 | Asset | Prepared content |
 |---|---|
 | Dataset `support-golden-v2`, version `1` | Eight validated rows copied byte-for-byte from `labs/03-evaluate/dataset/support-golden-v2.jsonl` to private `baseline/evals/support-golden-v2.jsonl`, registered as `uri_file` |

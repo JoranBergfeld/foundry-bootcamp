@@ -101,10 +101,32 @@ function Ensure-EvalsVersion([string]$Kind, [string]$Name, [hashtable]$Definitio
     return $verified
 }
 
-$labPath = Join-Path $PSScriptRoot '..\labs\03-evaluate'
-$datasetPath = Join-Path $labPath 'dataset\support-golden-v2.jsonl'
-$datasetBytes = [IO.File]::ReadAllBytes($datasetPath)
-$rows = @([IO.File]::ReadAllLines($datasetPath) | ForEach-Object { $_ | ConvertFrom-Json -AsHashtable })
+function Read-EvalsArchiveEntry([IO.Compression.ZipArchiveEntry]$Entry) {
+    if ($null -eq $Entry) { throw 'Evaluation asset archive is missing a required entry.' }
+    $stream = $Entry.Open()
+    $buffer = [IO.MemoryStream]::new()
+    try {
+        $stream.CopyTo($buffer)
+        return ,$buffer.ToArray()
+    } finally {
+        $stream.Dispose()
+        $buffer.Dispose()
+    }
+}
+
+# MicroHack stages labautomation as lab; sibling participant labs are not available.
+$archive = [IO.Compression.ZipFile]::OpenRead((Join-Path $PSScriptRoot 'dataset\support-evals-v2.zip'))
+try {
+    $datasetBytes = Read-EvalsArchiveEntry ($archive.GetEntry('dataset/support-golden-v2.jsonl'))
+    $knowledge = @($archive.Entries | Where-Object { $_.FullName -like 'knowledge/*' -and $_.Name } |
+        Sort-Object Name | ForEach-Object {
+            @{ Name = $_.Name; Bytes = Read-EvalsArchiveEntry $_ }
+        })
+} finally {
+    $archive.Dispose()
+}
+$datasetText = [Text.Encoding]::UTF8.GetString($datasetBytes).TrimEnd([char[]]"`r`n")
+$rows = @($datasetText -split '\r\n|\n|\r' | ForEach-Object { $_ | ConvertFrom-Json -AsHashtable })
 if ($rows.Count -ne 8 -or @($rows.id | Sort-Object -Unique).Count -ne 8) {
     throw 'Evaluation golden dataset must contain eight uniquely identified rows.'
 }
@@ -115,10 +137,9 @@ foreach ($row in $rows) {
         }
     }
 }
-$knowledge = @(Get-ChildItem -LiteralPath (Join-Path $labPath 'knowledge') -File | Sort-Object Name)
 if ($knowledge.Count -ne 3) { throw 'Evaluation knowledge must contain exactly three files.' }
 $manifest = @($knowledge | ForEach-Object {
-    "$($_.Name):$(Get-EvalsHash ([IO.File]::ReadAllBytes($_.FullName)))"
+    "$($_.Name):$(Get-EvalsHash $_.Bytes)"
 }) -join "`n"
 $metadata = @{ 'bootcamp-source-sha256' = Get-EvalsHash ([Text.Encoding]::UTF8.GetBytes($manifest)) }
 
@@ -150,7 +171,7 @@ if (-not (Test-EvalsDefinition $dataset $datasetDefinition) -or [string]::IsNull
 
 $files = @(Get-EvalsList "$openaiEndpoint/files?limit=100")
 $fileIds = @($knowledge | ForEach-Object {
-    $bytes = [IO.File]::ReadAllBytes($_.FullName)
+    $bytes = $_.Bytes
     $filename = "bootcamp-evals-$(Get-EvalsHash $bytes)-$($_.Name)"
     $existing = @($files | Where-Object { $_.filename -ceq $filename })
     if ($existing.Count -gt 1) { throw "Evaluation file '$filename' is ambiguous; no files were deleted." }
