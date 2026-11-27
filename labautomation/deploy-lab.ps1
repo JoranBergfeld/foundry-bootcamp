@@ -86,7 +86,21 @@ $existingFoundryAccountNames = @($resources | Where-Object {
     $_.Name
 })
 $existingStorageAccountTags = @{}
+$existingSearchServiceSkus = @{}
 foreach ($resource in $resources) {
+    if ($resource.ResourceType -eq 'Microsoft.Search/searchServices') {
+        if ([string]::IsNullOrWhiteSpace($resource.Name)) {
+            throw 'Search service inventory contains a resource without a name.'
+        }
+        $path = "/subscriptions/$SubscriptionId/resourceGroups/$ResourceGroupName/providers/Microsoft.Search/searchServices/$($resource.Name)?api-version=2026-11-01"
+        $search = (Invoke-AzRestMethod -Method GET -Path $path).Content |
+            ConvertFrom-Json -AsHashtable -ErrorAction Stop
+        if (-not $search -or -not $search.ContainsKey('sku') -or -not $search.sku -or
+            -not $search.sku.ContainsKey('name') -or [string]::IsNullOrWhiteSpace($search.sku.name)) {
+            throw "Existing Search service '$($resource.Name)' has no readable SKU. No tier change was attempted."
+        }
+        $existingSearchServiceSkus[$resource.Name.ToLowerInvariant()] = $search.sku.name.ToLowerInvariant()
+    }
     if ($resource.ResourceType -ne 'Microsoft.Storage/storageAccounts') { continue }
     $tags = @{}
     if ($null -ne $resource.Tags) {
@@ -101,6 +115,7 @@ $parameters = @{
     participantObjectIds = $AllowedEntraUserIds
     provisionerObjectId = $provisionerId.ToString()
     existingStorageAccountTags = $existingStorageAccountTags
+    existingSearchServiceSkus = $existingSearchServiceSkus
     existingFoundryAccountNames = $existingFoundryAccountNames
 }
 

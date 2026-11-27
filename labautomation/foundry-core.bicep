@@ -14,6 +14,9 @@ param provisionerObjectId string
 @description('Existing Storage tags by account name, supplied by the provisioning hook on reruns.')
 param existingStorageAccountTags object = {}
 
+@description('Existing Search SKUs by service name, supplied by the provisioning hook to prevent in-place serverless migrations.')
+param existingSearchServiceSkus object = {}
+
 @description('Names of existing Cognitive Services accounts in the resource group, supplied by the provisioning hook.')
 param existingFoundryAccountNames array
 
@@ -33,6 +36,10 @@ var projectName = 'bootcamp'
 var mcpEnvironmentName = 'mcp-env-${uniqueString(resourceGroup().id)}'
 var mcpAppName = 'mcp-time-${uniqueString(resourceGroup().id)}'
 var searchName = 'srch-${uniqueString(resourceGroup().id)}'
+var existingSearchSku = contains(existingSearchServiceSkus, searchName) ? existingSearchServiceSkus[searchName] : 'serverless'
+var searchSku = contains(['basic', 'serverless'], existingSearchSku)
+  ? existingSearchSku
+  : fail('The existing bootcamp Search service has an unsupported SKU. An organizer must resolve it without an in-place serverless migration.')
 var storageName = 'st${uniqueString(resourceGroup().id)}'
 var logsName = 'log-${uniqueString(resourceGroup().id)}'
 var insightsName = 'appi-${uniqueString(resourceGroup().id)}'
@@ -219,23 +226,24 @@ resource secondaryParticipantAccess 'Microsoft.Authorization/roleAssignments@202
   }
 }]
 
-// Basic is the smallest SKU with Entra data-plane RBAC, managed identity and semantic ranking for the labs.
-resource search 'Microsoft.Search/searchServices@2025-05-01' = {
+// New environments use consumption billing; existing Basic services cannot migrate in place.
+resource search 'Microsoft.Search/searchServices@2026-11-01' = {
   name: searchName
   location: location
   sku: {
-    name: 'basic'
+    name: searchSku
   }
   identity: {
     type: 'SystemAssigned'
   }
-  properties: {
+  properties: union({
+    disableLocalAuth: true
+    publicNetworkAccess: 'Enabled'
+    semanticSearch: 'free'
+  }, searchSku == 'basic' ? {
     replicaCount: 1
     partitionCount: 1
-    disableLocalAuth: true
-    publicNetworkAccess: 'enabled'
-    semanticSearch: 'free'
-  }
+  } : {})
 }
 
 resource storage 'Microsoft.Storage/storageAccounts@2024-01-01' = {

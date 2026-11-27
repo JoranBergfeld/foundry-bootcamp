@@ -26,8 +26,9 @@ and Application Insights tracing (#16), plus the pre-indexed baseline dataset
 - Register `Microsoft.CognitiveServices`, `Microsoft.Search`,
   `Microsoft.Storage`, `Microsoft.OperationalInsights`, `Microsoft.Insights`
   and `Microsoft.App`
-  for each event subscription before fan-out. Check the AI Search Basic service
-  limit per subscription/region for N participants. Provide Az.Accounts, Az.Resources (including
+  for each event subscription before fan-out. Check the AI Search Serverless service
+  limit per subscription/region for N participants (Basic for retained existing environments).
+  Provide Az.Accounts (including `Invoke-AzRestMethod`), Az.Resources (including
   `New-AzResourceGroup` and `New-AzRoleAssignment`), an installed Bicep compiler and the
   PowerShell 7.2 or later, and the current MicroHack helpers `Get-MhhStableHash`,
   `Invoke-MhhDeploymentWithRegionFallback`, and `Remove-MhhResourceGroup`.
@@ -38,6 +39,12 @@ and Application Insights tracing (#16), plus the pre-indexed baseline dataset
   input is accepted; empty/whitespace input fails before any Azure operation.
   The repository deliberately supplies no default region, including in
   `lab-defaults.json`.
+- New environments require a region supporting **Serverless, semantic ranker and
+  agentic retrieval**, as well as the Foundry models below. Check the current
+  [regional matrix](https://learn.microsoft.com/azure/search/search-region-support)
+  before allocation; for example, Sweden Central supports all three Search features,
+  while West Europe and North Europe do not currently offer Serverless. The hook
+  does not silently substitute Basic when Serverless is unavailable.
 - Validate access, model availability, deployment type and quota for **all four deployments**
   models in the actual event subscriptions and preferred regions before
   participant allocation. For each region, organizer read-only preflight can
@@ -169,12 +176,27 @@ no-auth service; no header or token is needed.
 
 | Resource | Choice |
 |---|---|
-| AI Search | `srch-<uniqueString>`, Basic, 1 replica/partition, semantic ranker free tier, system-assigned identity, `disableLocalAuth` (Entra only) |
+| AI Search | `srch-<uniqueString>`, Serverless for new environments (no replicas/partitions), existing Basic retained at 1 replica/partition; semantic ranker free tier, system-assigned identity, `disableLocalAuth` (Entra only) |
 | Storage | `st<uniqueString>`, StorageV2 Standard_LRS, public network access, `SecurityControl=Ignore`, shared key and public blob access disabled, OAuth default, TLS 1.2 |
 | Baseline container | `baseline` (private); contains the shared ticket dataset |
 | Log Analytics | `log-<uniqueString>`, PerGB2018, 30-day retention, local auth disabled |
 | Application Insights | `appi-<uniqueString>`, workspace-based, local auth disabled |
 | Project connections | `bootcamp-tracing` (AppInsights) and `bootcamp-search` (CognitiveSearch), both `ProjectManagedIdentity`, no stored authentication credentials |
+
+Search uses management API `2026-11-01` and baseline data-plane API `2026-10-01`,
+which supports Serverless blob indexers. Serverless bills compute consumption and
+indexed storage, including indexing and reruns; it is not a free tier. Each index
+has a 10 GB limit. Indexers share a 48-hour cumulative runtime budget per service
+per UTC day and have a two-hour per-run limit; our provisioning still requires
+the complete 100,000-ticket baseline within one hour.
+
+Serverless supports inbound private endpoints, but not private indexer execution
+or outbound shared private links. The baseline indexer uses the Search managed
+identity against Storage's public endpoint; private blob access does not require
+a private network endpoint. If tenant policy makes Storage private-endpoint-only,
+this ingestion path cannot work on Serverless.
+See [pricing models](https://learn.microsoft.com/azure/search/search-sku-tier) and
+[Serverless indexer execution](https://learn.microsoft.com/azure/search/search-indexer-high-density-serverless-overview).
 
 Azure requires the Application Insights connection string as routing metadata
 on `bootcamp-tracing`. ARM retrieves it from the Application Insights resource;
@@ -371,6 +393,12 @@ and role assignment names, and incremental ARM mode, retain unrelated
 resources, agents, connections and participant work. Failed deployments
 propagate; there is no automatic reset. An existing populated scope uses this
 path even if organizer opt-in remains set.
+
+The hook reads existing Search SKUs from ARM and preserves the managed service's
+Basic or Serverless SKU. ARM cannot migrate between Dedicated and Serverless in
+place. To adopt Serverless in an existing Basic environment, an organizer must
+plan a separate service/environment, rebuild the baseline and reconnect Foundry;
+the hook never deletes or replaces Search to force this migration.
 
 For organizer-run **initial provisioning only**, the organizer may set
 `BOOTCAMP_ORGANIZER_INITIAL_PROVISIONING=true` in the **provisioner job process

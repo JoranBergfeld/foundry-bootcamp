@@ -11,6 +11,7 @@ BeforeAll {
     function Get-AzAccessToken { param($ResourceUrl) }
     function Get-AzResourceGroup {}
     function Get-AzResource { param($ResourceGroupName) }
+    function Invoke-AzRestMethod { param($Method, $Path) }
     function Get-MhhStableHash { param($InputString, $Length) }
     function Remove-MhhResourceGroup { param($ResourceGroupName) }
     function Get-AzResourceLock { param($ResourceGroupName) }
@@ -105,6 +106,7 @@ Describe 'MicroHack Foundry provisioning hook' {
             }
         }
         Mock Get-AzResource { @() }
+        Mock Invoke-AzRestMethod { @{ Content = '{"sku":{"name":"basic"}}' } }
         Mock Get-AzResourceLock { @() }
         Mock Get-AzResourceGroupDeployment { @() }
         Mock Get-AzRoleAssignment {
@@ -187,7 +189,8 @@ Describe 'MicroHack Foundry provisioning hook' {
             $ResourceGroupName -eq 'participant' -and
             $RgOwnerEntraObjectIds[0] -eq '00000000-0000-0000-0000-000000000002' -and
             $TemplateParameterObject.participantObjectIds[0] -eq '00000000-0000-0000-0000-000000000002' -and
-            $TemplateParameterObject.existingFoundryAccountNames.Count -eq 0
+            $TemplateParameterObject.existingFoundryAccountNames.Count -eq 0 -and
+            $TemplateParameterObject.existingSearchServiceSkus.Count -eq 0
         }
         $credentials.Count | Should -Be 21
         $values = @{}
@@ -238,6 +241,35 @@ Describe 'MicroHack Foundry provisioning hook' {
         Should -Invoke Invoke-MhhDeploymentWithRegionFallback -Times 0
     }
 
+    It 'preserves an existing <Sku> Search service instead of migrating it in place' -ForEach @(
+        @{ Sku = 'basic' }
+        @{ Sku = 'serverless' }
+    ) {
+        Mock Get-AzResource { @{ ResourceType = 'Microsoft.Search/searchServices'; Name = 'srch-example' } }
+        Mock Invoke-AzRestMethod { @{ Content = "{`"sku`":{`"name`":`"$Sku`"}}" } }
+        & $script:Hook @script:Inputs | Out-Null
+        Should -Invoke Invoke-AzRestMethod -Times 1 -Exactly -ParameterFilter {
+            $Method -eq 'GET' -and $Path -eq '/subscriptions/00000000-0000-0000-0000-000000000001/resourceGroups/participant/providers/Microsoft.Search/searchServices/srch-example?api-version=2026-11-01'
+        }
+        Should -Invoke New-AzResourceGroupDeployment -Times 1 -Exactly -ParameterFilter {
+            $Mode -eq 'Incremental' -and $TemplateParameterObject.existingSearchServiceSkus['srch-example'] -eq $Sku
+        }
+        Should -Invoke Invoke-MhhDeploymentWithRegionFallback -Times 0
+        Should -Invoke Remove-MhhResourceGroup -Times 0
+    }
+
+    It 'fails before deployment when an existing Search SKU cannot be read: <Response>' -ForEach @(
+        @{ Response = '{}' }
+        @{ Response = '{"sku":null}' }
+        @{ Response = '{"sku":{}}' }
+    ) {
+        Mock Get-AzResource { @{ ResourceType = 'Microsoft.Search/searchServices'; Name = 'srch-example' } }
+        Mock Invoke-AzRestMethod { @{ Content = $Response } }
+        { & $script:Hook @script:Inputs } | Should -Throw '*no readable SKU*No tier change was attempted*'
+        Should -Invoke New-AzResourceGroupDeployment -Times 0
+        Should -Invoke Invoke-MhhDeploymentWithRegionFallback -Times 0
+    }
+
     It 'keeps an existing RG in its own region when that region is a supplied preference' {
         $env:BOOTCAMP_ORGANIZER_INITIAL_PROVISIONING = $null
         $script:Inputs.PreferredLocation = @('region-second', 'region-first')
@@ -253,7 +285,7 @@ Describe 'MicroHack Foundry provisioning hook' {
     It 'fails clearly when an existing RG is outside the supplied regions' {
         $env:BOOTCAMP_ORGANIZER_INITIAL_PROVISIONING = $null
         $script:Inputs.PreferredLocation = @('region-second')
-        Mock Get-AzResource { @{ ResourceType = 'Microsoft.Search/searchServices' } }
+        Mock Get-AzResource { @{ ResourceType = 'Microsoft.Search/searchServices'; Name = 'srch-example' } }
         $published = [System.Collections.Generic.List[object]]::new()
         { & $script:Hook @script:Inputs | ForEach-Object { $published.Add($_) } } |
             Should -Throw "*'region-first'*not among the supplied regions*region-second*"
@@ -530,6 +562,10 @@ Describe 'MicroHack Foundry provisioning hook' {
         $indexer.parameters.configuration.firstLineContainsHeaders | Should -BeTrue
         $indexer.targetIndexName | Should -Be $indexName
         $state = $global:ProvisioningTestDataPlane
+        $searchRequests = @($state.Requests | Where-Object { ([uri]$_.Uri).Host -eq 'srch.example.search.windows.net' })
+        $searchRequests.Count | Should -BeGreaterThan 0
+        @($searchRequests | Where-Object { ([uri]$_.Uri).Query -notmatch 'api-version=2026-10-01(?:&|$)' }).Count |
+            Should -Be 0
         $fields = $state.Search.indexes['bootcamp-baseline-v1'].fields
         ($fields.name -join ',') | Should -Be (
             'ticket_id,created_at,customer_id,customer_segment,channel,product_area,issue_type,priority,status,sla_plan,' +
@@ -615,7 +651,7 @@ Describe 'MicroHack Foundry provisioning hook' {
         @{ Scenario = 'modified key mapping' }
     ) {
         $env:BOOTCAMP_ORGANIZER_INITIAL_PROVISIONING = $null
-        Mock Get-AzResource { @{ ResourceType = 'Microsoft.Search/searchServices' } }
+        Mock Get-AzResource { @{ ResourceType = 'Microsoft.Search/searchServices'; Name = 'srch-example' } }
         & $script:Hook @script:Inputs | Out-Null
         $state = $global:ProvisioningTestDataPlane
         $state.Search.indexes['participant-lab-index'] = @{ name = 'participant-lab-index'; custom = 'keep' }
@@ -666,7 +702,7 @@ Describe 'MicroHack Foundry provisioning hook' {
     It 'repairs an incomplete baseline index on rerun without replacing Search objects or participant fields' {
         & $script:Hook @script:Inputs | Out-Null
         $env:BOOTCAMP_ORGANIZER_INITIAL_PROVISIONING = $null
-        Mock Get-AzResource { @{ ResourceType = 'Microsoft.Search/searchServices' } }
+        Mock Get-AzResource { @{ ResourceType = 'Microsoft.Search/searchServices'; Name = 'srch-example' } }
         $state = $global:ProvisioningTestDataPlane
         $state.IndexedRows = 40000
         $state.Search.indexes['bootcamp-baseline-v1'].fields += @{
@@ -974,8 +1010,14 @@ Describe 'MicroHack Foundry provisioning hook' {
         $arm = $core.Arm
         $search = @($arm.resources | Where-Object type -eq 'Microsoft.Search/searchServices')
         $search.Count | Should -Be 1
-        $search[0].properties.disableLocalAuth | Should -BeTrue
-        $search[0].properties.Keys | Should -Not -Contain 'authOptions'
+        $search[0].apiVersion | Should -Be '2026-11-01'
+        $arm.parameters.existingSearchServiceSkus.defaultValue.Count | Should -Be 0
+        $arm.variables.existingSearchSku | Should -Match "contains\(parameters\('existingSearchServiceSkus'\), variables\('searchName'\)\)"
+        $arm.variables.existingSearchSku | Should -Match ", 'serverless'\)"
+        $search[0].sku.name | Should -Be "[variables('searchSku')]"
+        $search[0].properties | Should -Match "if\(equals\(variables\('searchSku'\), 'basic'\), createObject\('replicaCount', 1, 'partitionCount', 1\), createObject\(\)\)"
+        $search[0].properties | Should -Match "'disableLocalAuth', true"
+        $search[0].properties | Should -Not -Match 'authOptions'
         $search[0].identity.type | Should -Be 'SystemAssigned'
         $storage = @($arm.resources | Where-Object type -eq 'Microsoft.Storage/storageAccounts')
         $storage.Count | Should -Be 1
