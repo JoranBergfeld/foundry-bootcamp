@@ -10,6 +10,7 @@ BeforeAll {
     function Get-AzResourceLock { param($ResourceGroupName) }
     function Get-AzResourceGroupDeployment { param($ResourceGroupName) }
     function Get-AzRoleAssignment { param($Scope) }
+    function Remove-AzRoleAssignment { param($ObjectId, $RoleDefinitionId, $Scope) }
     function New-AzResourceGroup { param($Name, $Location) }
     function New-AzRoleAssignment { param($ObjectId, $RoleDefinitionId, $Scope) }
     function New-AzResourceGroupDeployment {
@@ -118,6 +119,7 @@ Describe 'MicroHack Foundry provisioning hook' {
             }
         }
         Mock New-AzRoleAssignment {}
+        Mock Remove-AzRoleAssignment {}
         Mock Remove-MhhResourceGroup {
             @{ ManifestCaptured = $true; Errors = @(); SoftDeletedResidual = @() }
         }
@@ -326,6 +328,50 @@ Describe 'MicroHack Foundry provisioning hook' {
         & $script:Hook @script:Inputs | Out-Null
         Should -Invoke New-AzRoleAssignment -Times 0
         Should -Invoke New-AzResourceGroup -Times 0
+    }
+
+    It 'removes only participants direct subscription Reader grants' {
+        $env:BOOTCAMP_ORGANIZER_INITIAL_PROVISIONING = $null
+        $subscriptionScope = '/subscriptions/00000000-0000-0000-0000-000000000001'
+        Mock Get-AzRoleAssignment {
+            @(
+                @{
+                    Scope = $subscriptionScope
+                    ObjectId = '00000000-0000-0000-0000-000000000002'
+                    RoleDefinitionId = "$subscriptionScope/providers/Microsoft.Authorization/roleDefinitions/acdd72a7-3385-48ef-bd42-f606fba81ae7"
+                }
+                @{
+                    Scope = $subscriptionScope
+                    ObjectId = '00000000-0000-0000-0000-000000000002'
+                    RoleDefinitionId = "$subscriptionScope/providers/Microsoft.Authorization/roleDefinitions/8e3af657-a8ff-443c-a75c-2fe8c4bcb635"
+                }
+                @{
+                    Scope = $subscriptionScope
+                    ObjectId = '00000000-0000-0000-0000-000000000099'
+                    RoleDefinitionId = "$subscriptionScope/providers/Microsoft.Authorization/roleDefinitions/acdd72a7-3385-48ef-bd42-f606fba81ae7"
+                }
+                @{
+                    Scope = "$subscriptionScope/resourceGroups/participant"
+                    ObjectId = '00000000-0000-0000-0000-000000000002'
+                    RoleDefinitionId = "$subscriptionScope/providers/Microsoft.Authorization/roleDefinitions/acdd72a7-3385-48ef-bd42-f606fba81ae7"
+                }
+                @{
+                    Scope = "$subscriptionScope/resourceGroups/participant"
+                    ObjectId = '00000000-0000-0000-0000-000000000002'
+                    RoleDefinitionId = "$subscriptionScope/providers/Microsoft.Authorization/roleDefinitions/8e3af657-a8ff-443c-a75c-2fe8c4bcb635"
+                    Condition = $null
+                }
+            )
+        }
+
+        & $script:Hook @script:Inputs | Out-Null
+
+        Should -Invoke Remove-AzRoleAssignment -Times 1 -Exactly -ParameterFilter {
+            $ObjectId -eq '00000000-0000-0000-0000-000000000002' -and
+            $RoleDefinitionId -eq 'acdd72a7-3385-48ef-bd42-f606fba81ae7' -and
+            $Scope -eq $subscriptionScope
+        }
+        Should -Invoke New-AzRoleAssignment -Times 0
     }
 
     It 'accepts comma-separated platform preferences without adding a fallback region' {

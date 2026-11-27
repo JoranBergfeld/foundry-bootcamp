@@ -34,6 +34,19 @@ if (-not $context -or $context.Subscription.Id -ne $SubscriptionId) {
     throw 'The authenticated subscription must match SubscriptionId. MicroHack must supply the authenticated context.'
 }
 
+if ($DeploymentType -eq 'resourcegroup') {
+    $subscriptionScope = "/subscriptions/$SubscriptionId"
+    $readerRoleId = 'acdd72a7-3385-48ef-bd42-f606fba81ae7'
+    $participantReaderAssignments = @(Get-AzRoleAssignment -Scope $subscriptionScope | Where-Object {
+        $_.Scope -eq $subscriptionScope -and $_.ObjectId -in $AllowedEntraUserIds -and
+        ($_.RoleDefinitionId -split '/')[-1] -eq $readerRoleId
+    })
+    foreach ($assignment in $participantReaderAssignments) {
+        $null = Remove-AzRoleAssignment -ObjectId $assignment.ObjectId `
+            -RoleDefinitionId $readerRoleId -Scope $subscriptionScope
+    }
+}
+
 $armToken = (Get-AzAccessToken -ResourceUrl 'https://management.azure.com/').Token
 $tokenText = if ($armToken -is [securestring]) {
     [System.Net.NetworkCredential]::new('', $armToken).Password
