@@ -104,7 +104,7 @@ if ($foundBlobs.Count -ne $expectedBlobs.Count) {
 }
 
 $searchAudience = 'https://search.azure.com/'
-$searchApiVersion = '2025-09-01'
+$searchApiVersion = '2026-10-01'
 $indexName = 'bootcamp-baseline-v1'
 $sourceName = 'bootcamp-baseline-v1-source'
 $indexerName = 'bootcamp-baseline-v1-indexer'
