@@ -16,8 +16,7 @@ Set-StrictMode -Version Latest
 . (Join-Path $PSScriptRoot 'provisioning-http.ps1')
 $ProjectEndpoint = $ProjectEndpoint.TrimEnd('/')
 $audience = 'https://ai.azure.com/'
-$accountEndpoint = ([uri]$ProjectEndpoint).GetLeftPart([UriPartial]::Authority)
-$openaiEndpoint = "$accountEndpoint/openai/v1"
+$openaiEndpoint = "$ProjectEndpoint/openai/v1"
 $projectHeaders = @{}
 
 function Invoke-EvalsJson {
@@ -142,14 +141,6 @@ $manifest = @($knowledge | ForEach-Object {
     "$($_.Name):$(Get-EvalsHash $_.Bytes)"
 }) -join "`n"
 $metadata = @{ 'bootcamp-source-sha256' = Get-EvalsHash ([Text.Encoding]::UTF8.GetBytes($manifest)) }
-
-$project = Invoke-EvalsJson "https://management.azure.com${ProjectResourceId}?api-version=2025-09-01" `
-    -ResourceUrl 'https://management.azure.com/' -Headers @{}
-$projectGuid = [guid]::Empty
-if (-not [guid]::TryParse($project.properties.amlWorkspace.internalId, [ref]$projectGuid) -or $projectGuid -eq [guid]::Empty) {
-    throw 'Evaluation provisioning requires the Foundry project amlWorkspace.internalId for toolbox file isolation.'
-}
-$projectHeaders['x-aml-project-id'] = $projectGuid.ToString()
 
 $datasetUri = "https://$StorageAccountName.blob.core.windows.net/$ContainerName/evals/support-golden-v2.jsonl"
 Publish-ProvisioningBlob $datasetUri $datasetBytes 'application/jsonl; charset=utf-8'
