@@ -256,10 +256,18 @@ Invoke-Pester .\tests\provisioning\Deploy-Lab.Tests.ps1
 
 Dataset, agent and toolbox operations use the Foundry `v1` data-plane API.
 The toolbox connection uses management API `2026-09-01`, whose provider supports
-`UserEntraToken`. Toolbox file and vector-store requests use the **account-level**
-`/openai/v1` endpoint with `x-aml-project-id` obtained from the project's
-`properties.amlWorkspace.internalId`. Do not drop this header or substitute
-another project's store. See [File Search](https://learn.microsoft.com/azure/foundry/agents/how-to/tools/file-search)
+`UserEntraToken`. Toolbox file and vector-store requests use the **project-scoped**
+`{projectEndpoint}/openai/v1` endpoint, matching the
+[Azure AI Projects SDK client](https://github.com/Azure/azure-sdk-for-python/blob/main/sdk/ai/azure-ai-projects/azure/ai/projects/_patch.py).
+The project URL supplies the isolation boundary; do not fall back to the account
+endpoint or substitute another project's store. No `x-aml-project-id` header or
+ARM `properties.amlWorkspace.internalId` lookup is needed: that property is not
+part of the [ARM project contract](https://learn.microsoft.com/rest/api/microsoftfoundry/accountmanagement/projects/get).
+The File Search REST toolbox example still describes an account-level route
+with that header, unlike its project-scoped upload examples and the current SDK.
+Provisioning uses the SDK route and retains the actual toolbox File Search
+preflight below; confirm that preflight in the event tenant before fan-out.
+See [File Search](https://learn.microsoft.com/azure/foundry/agents/how-to/tools/file-search)
 and [toolbox setup](https://learn.microsoft.com/azure/foundry/agents/how-to/tools/toolbox).
 The toolbox tool uses the flat `vector_store_ids` shape in the current SDK contract.
 

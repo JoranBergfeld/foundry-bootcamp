@@ -816,6 +816,25 @@ Describe 'MicroHack Foundry provisioning hook' {
         $state.Foundry.Connections['bootcamp-evals-toolbox'].properties.audience | Should -Be 'https://ai.azure.com'
     }
 
+    It 'provisions evaluation assets when the ARM project has no amlWorkspace property' {
+        $state = $global:ProvisioningTestDataPlane
+        $state.ProjectProperties.ContainsKey('amlWorkspace') | Should -BeFalse
+        $assets = Invoke-TestEvals
+        $assets.EvalsDatasetName | Should -Be 'support-golden-v2'
+        $fileRequests = @($state.Requests | Where-Object { $_.Uri -like '*/openai/v1/*' })
+        $fileRequests.Count | Should -BeGreaterThan 0
+        foreach ($request in $fileRequests) {
+            $request.Uri | Should -BeLike 'https://foundry.example/api/projects/bootcamp/openai/v1/*'
+            $request.Headers.ContainsKey('x-aml-project-id') | Should -BeFalse
+        }
+        @($state.Requests | Where-Object {
+            ([uri]$_.Uri).Host -eq 'management.azure.com' -and
+                ([uri]$_.Uri).AbsolutePath.EndsWith('/projects/bootcamp')
+        }).Count | Should -Be 0
+        $state.Foundry.Files.Count | Should -Be 3
+        $state.Foundry.Stores[$assets.EvalsVectorStoreId].file_ids | Should -HaveCount 3
+    }
+
     It 'provisions evaluation assets from the isolated MicroHack lab directory without sibling participant labs' {
         $runner = Join-Path $TestDrive 'microhack'
         $null = New-Item -ItemType Directory -Path $runner -Force
@@ -897,7 +916,7 @@ Describe 'MicroHack Foundry provisioning hook' {
 
     It 'does not replay an uncertain file create and reconciles the partial upload on rerun' {
         Mock Invoke-WebRequest {
-            if ($Uri -eq 'https://foundry.example/openai/v1/files' -and $Method -eq 'Post' -and
+            if ($Uri -eq 'https://foundry.example/api/projects/bootcamp/openai/v1/files' -and $Method -eq 'Post' -and
                 $global:ProvisioningTestDataPlane.Foundry.Files.Count -eq 2) {
                 return [pscustomobject]@{ StatusCode = 500; Content = 'Uncertain create'; Headers = @{} }
             }
@@ -905,7 +924,7 @@ Describe 'MicroHack Foundry provisioning hook' {
         }
         { Invoke-TestEvals } | Should -Throw '*HTTP 500*'
         Should -Invoke Invoke-WebRequest -Times 3 -Exactly -ParameterFilter {
-            $Uri -eq 'https://foundry.example/openai/v1/files' -and $Method -eq 'Post'
+            $Uri -eq 'https://foundry.example/api/projects/bootcamp/openai/v1/files' -and $Method -eq 'Post'
         }
         Mock Invoke-WebRequest {
             Invoke-FakeAzureDataPlane -Uri $Uri -Method $Method -Headers $Headers -Body $Body -State $global:ProvisioningTestDataPlane

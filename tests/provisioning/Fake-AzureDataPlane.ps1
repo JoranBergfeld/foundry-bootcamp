@@ -16,6 +16,7 @@ function New-FakeAzureDataPlane {
         EvalsPageSize = 100
         EvalsMcpError = $false
         EvalsMcpSse = $false
+        ProjectProperties = @{ provisioningState = 'Succeeded'; displayName = 'bootcamp'; isDefault = $false }
     }
 }
 
@@ -103,7 +104,10 @@ function Invoke-FakeAzureDataPlane {
         $result = $null
         $status = 200
         $path = $url.AbsolutePath
-        $json = if ($Body -and $Headers['Content-Type'] -notlike 'multipart/*' -and $path -ne '/openai/v1/files') {
+        if ($url.Host -eq 'foundry.example' -and $path -like '/openai/v1/*') {
+            throw 'Evaluation file and vector-store operations must use the project-scoped endpoint.'
+        }
+        $json = if ($Body -and $Headers['Content-Type'] -notlike 'multipart/*' -and $path -notlike '*/openai/v1/files') {
             [Text.Encoding]::UTF8.GetString($Body) | ConvertFrom-Json -AsHashtable
         } else { $null }
         if ($url.Host -eq 'management.azure.com') {
@@ -115,7 +119,7 @@ function Invoke-FakeAzureDataPlane {
                 }
                 if ($foundry.Connections.ContainsKey($name)) { $result = $foundry.Connections[$name] } else { $status = 404 }
             } else {
-                $result = @{ properties = @{ amlWorkspace = @{ internalId = '00000000-0000-0000-0000-000000000004' } } }
+                $result = @{ properties = $State.ProjectProperties }
             }
         } elseif ($path -match '^/api/projects/bootcamp/datasets/([^/]+)/versions/([^/]+)$') {
             $key = "$($Matches[1])/$($Matches[2])"
@@ -160,10 +164,8 @@ function Invoke-FakeAzureDataPlane {
                     @{ data = @($foundry[$kind][$name]); has_more = $false }
                 }
             } else { $status = 404 }
-        } elseif ($path -like '/openai/v1/*') {
-            if ($Headers['x-aml-project-id'] -ne '00000000-0000-0000-0000-000000000004') {
-                throw 'Resource-level toolbox file operations require project isolation.'
-            }
+        } elseif ($path -like '/api/projects/bootcamp/openai/v1/*') {
+            $path = $path.Substring('/api/projects/bootcamp'.Length)
             if ($path -eq '/openai/v1/files') {
                 if ($methodName -eq 'Post') {
                     $text = [Text.Encoding]::UTF8.GetString($Body)
