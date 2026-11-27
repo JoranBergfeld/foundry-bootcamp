@@ -18,8 +18,11 @@ and Application Insights tracing (#16), plus the pre-indexed baseline dataset
   assignment creation. The hook verifies the context and never signs in or
   switches subscriptions. Its ARM access token must contain the authenticated
   principal's Entra `oid` claim; the same principal must be able to obtain
-  tokens for Storage, Search and `https://ai.azure.com/`. The template grants this principal the
-  resource-scoped data-plane roles required below.
+  tokens for Storage, Search and `https://ai.azure.com/`. Provide `Remove-AzRoleAssignment`; for
+  `resourcegroup` deployments the hook removes MicroHack's direct subscription
+  Reader grant for each participant, while preserving their resource-group
+  Owner grant. The template grants the provisioner the resource-scoped
+  data-plane roles required below.
 - Register `Microsoft.CognitiveServices`, `Microsoft.Search`,
   `Microsoft.Storage`, `Microsoft.OperationalInsights`, `Microsoft.Insights`
   and `Microsoft.App`
@@ -393,10 +396,11 @@ Metadata listing errors also stop provisioning rather than authorizing deletion.
 
 The helper receives platform regions in order, plus participant IDs so that
 MicroHack restores the **only permitted direct grants**, participant RG Owner,
-after recreation. Inherited subscription access is unaffected. Any other
-RG-scoped platform access prevents fallback. Because the helper otherwise
-prioritizes an existing RG's location, a disposable initial RG in a different
-region is removed with
+after recreation. The hook removes the direct subscription Reader grant in
+`resourcegroup` mode before deployment; access inherited from groups or broader
+management scopes is unaffected. Any other RG-scoped platform access prevents
+fallback. Because the helper otherwise prioritizes an existing RG's location,
+a disposable initial RG in a different region is removed with
 `Remove-MhhResourceGroup` first, with cleanup results checked, so that the first
 supplied preference really is tried first.
 
