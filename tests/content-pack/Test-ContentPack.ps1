@@ -80,6 +80,10 @@ foreach ($lab in $labs) {
 }
 
 $requiredParticipantFiles = [ordered]@{
+    '01' = @(
+        'labs/01-build-basic/assets/products.md'
+        'labs/01-build-basic/assets/store-policies.md'
+    )
     '02' = @('labs/02-build-advanced/lab.ps1')
     '03' = @(
         'labs/03-evaluate/lab.ps1'

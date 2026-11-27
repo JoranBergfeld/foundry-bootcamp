@@ -133,6 +133,19 @@ If the provisioner is also a supplied participant, its participant roles
 already cover these operations and duplicate role assignments are avoided.
 All role assignments use stable resource/principal/role-derived names.
 
+## Lab 01 File Search preflight
+
+The basic-agent lab uploads two fictional files to a File Search vector store.
+The deployment does not configure a standard agent setup or verify this
+portal workflow. Before the event, organizers must confirm that the actual
+participant project and region allow file upload, vector-store creation and
+attachment to a prompt agent, and that participants have the required access.
+Basic agent setup uses Microsoft-managed file and search resources; a
+standard setup requires explicitly connected resources and appropriate
+storage roles. The `bootcamp-search` connection and baseline index do not
+establish that File Search is ready. Allow for File Search storage and model
+charges, and validate the path without changing shared resources or using keys.
+
 ## Storage network access
 
 The Storage account is tagged `SecurityControl=Ignore` and requests
