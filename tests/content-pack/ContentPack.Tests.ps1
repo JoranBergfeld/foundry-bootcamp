@@ -46,6 +46,8 @@ BeforeAll {
 - Fix.
 "@
         }
+        Write-PackFile $root 'labs/01-build-basic/assets/products.md' 'Product catalog'
+        Write-PackFile $root 'labs/01-build-basic/assets/store-policies.md' 'Store policy'
         Write-PackFile $root 'labs/02-build-advanced/lab.ps1' '# Participant script'
         foreach ($file in 'lab.ps1', 'SOURCE-LICENSE.txt', 'dataset/support-golden-v2.jsonl', 'knowledge/support-policy.txt',
             'knowledge/KB-BIL-003_invoice-doesnt-match-plan-discrepancies-and-refunds.md',
@@ -152,6 +154,22 @@ Run ``az login`` first.
         } | ConvertTo-Json -Depth 5)
 
         Invoke-Check $root | Should -Contain 'Lab 02: Student ZIP is missing labs/02-build-advanced/lab.ps1'
+    }
+
+    It 'reports a missing Lab 01 catalog in the Student ZIP' {
+        $root = New-ValidPack
+        Remove-Item (Join-Path $root 'labs/01-build-basic/assets/products.md')
+
+        Invoke-Check $root | Should -Contain 'Lab 01: Student ZIP is missing labs/01-build-basic/assets/products.md'
+    }
+
+    It 'reports an excluded Lab 01 policy in the Student ZIP' {
+        $root = New-ValidPack
+        Write-PackFile $root 'labautomation/lab-defaults.json' (@{
+            contentPreparation = @{ studentZipExclusions = @('docs', 'AGENTS.md', 'GLOSSARY.md', 'tests', 'labs/01-build-basic/assets/store-policies.md') }
+        } | ConvertTo-Json -Depth 5)
+
+        Invoke-Check $root | Should -Contain 'Lab 01: Student ZIP is missing labs/01-build-basic/assets/store-policies.md'
     }
 
     It 'reports a missing Lab 03 evaluation asset in the Student ZIP' {

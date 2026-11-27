@@ -1,6 +1,8 @@
 # Challenge 01: Build it (basic)
 
-Build a first agent in the shared participant environment.
+Build and test a retail shopping assistant in the Foundry portal. Give it
+instructions, ground it in a fictional product catalog and store policy, and
+inspect the evidence behind its answers.
 
 This lab is independent and does not require work from another lab. Download and
 extract the Student ZIP, then read the
