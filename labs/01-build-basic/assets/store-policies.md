@@ -1,17 +1,18 @@
-# Fictional store policies
+# Contoso Sports – Store Policies (fictional, for training only)
 
-These policies are invented for the bootcamp and do not describe a real shop.
+## Delivery
+- Free standard delivery on orders over €50 in the Netherlands, Belgium and Germany.
+- Standard delivery: 2–4 working days. Express delivery: next working day for €7.95 (order before 20:00).
 
 ## Returns
+- Return any unused item within 30 days for a full refund.
+- Running shoes may be tried on indoors; shoes with outdoor wear cannot be returned.
+- Returns are free with the return label in the parcel.
 
-An unused item in its original packaging can be returned within 30 calendar
-days of delivery. For a regular return, the customer pays return shipping.
+## Discounts
+- Students get 10% off with a valid student card (online verification).
+- There are no other active discount codes. Never promise discounts that are not listed here.
 
-If an item arrives damaged, contact the store within 14 calendar days of
-delivery. The store pays the return shipping for a reported damaged item.
-
-## Standard delivery
-
-Standard delivery costs $5 for an order subtotal below $50. Standard delivery
-is free for an order subtotal of $50 or more. Delivery normally takes 3-5
-business days after dispatch.
+## Support
+- Email: support@contoso-sports.example
+- Hours: Monday–Friday, 09:00–17:00 CET

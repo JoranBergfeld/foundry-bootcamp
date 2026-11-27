@@ -1,153 +1,156 @@
 # Lab 01: Build it (basic)
 
+Build your first AI agent in Microsoft Foundry (no code).
+
+Part of the **Microsoft Foundry Winter Bootcamp** (MicroHack). Everything happens in the browser – no code, no SDK.
+
+| | |
+|---|---|
+| **Level** | Beginner |
+| **Time** | 45 minutes follow-along; any theory introduction is separate |
+| **You need** | The **username and password** from the MicroHack – everything else is already provisioned |
+| **You will build** | `Shopping-Assistant` – a prompt agent with one toolbox of five tools |
+
 ## Prerequisites
 
-- An organizer-provided participant environment, with access to its Foundry
-  project and chat model deployment. Find `FoundryProjectEndpoint` and
-  `ChatDeploymentName` on your participant dashboard. Shared provisioning is
-  intended to grant you the **Foundry User** role.
-- A browser with access to the Foundry portal and the extracted Student ZIP.
-  No SDK, command line, or other lab is required.
-- **File Search readiness:** the organizer must verify that the project can
-  upload files, create a vector store, and attach File Search in the portal.
-  Shared provisioning does not currently verify this path. If the project
-  uses a standard agent setup, it needs connected Storage and Foundry IQ
-  resources, and you need **Storage Blob Data Contributor** on the connected
-  storage account. Ask the organizer if access or setup is missing; do not
-  create a new project, change the setup, or use a key.
-- Only use the fictional files supplied with this lab. Basic agent setup uses
-  Microsoft-managed storage and search for File Search; standard setup uses
-  the resources connected to the agent environment. The shared baseline
-  ticket index is separate and is not changed by this exercise.
+- An organizer-provided participant account and extracted Student ZIP. Find
+  `FoundryProjectEndpoint` and `ChatDeploymentName` on your participant dashboard;
+  select the matching project and deployment, not another participant's resources.
+- A browser with access to the Foundry portal. No SDK, command line or previous lab is required.
+- **Organizer readiness check:** verify the participant portal can upload files,
+  create a new vector store, attach File Search and run each of the five toolbox
+  tools. Provisioning checks basic File Search ingestion, not this complete
+  portal workflow. The `bootcamp-search` connection alone does not establish
+  File Search readiness. Basic setup uses Microsoft-managed resources; standard
+  setup needs connected resources and the appropriate storage roles.
+- Confirm model-router availability and tracing before the session. Model calls,
+  File Search storage, search tools and additional deployments can incur charges.
+  The complete five-tool portal path has not been validated live for this PR.
+- Use only the supplied fictional files and synthetic tickets. Do not send
+  credentials or real customer data to Web search or external MCP tools.
 
-Model calls and File Search storage can incur charges. The portal steps and
-File Search have not yet been verified end to end in the event environment.
-See the [File Search guide](https://learn.microsoft.com/en-us/azure/foundry/agents/how-to/tools/file-search)
-for current setup and availability.
+### Already set up for you (MicroHack)
+
+You get a **username and password**; you don't have to set anything up. Your account has **Owner** rights and comes with:
+
+| Ready | Name |
+|---|---|
+| Foundry project | `bootcamp` |
+| Chat model | `bootcamp-chat` (gpt-5.4-mini) |
+| Embedding model | `bootcamp-embedding` |
+| Azure AI Search, pre-indexed with 100,000 synthetic IT support tickets | index `bootcamp-baseline-v1` · connection `bootcamp-search` |
+| Tracing to Application Insights | connection `bootcamp-tracing` |
+
+**Do not delete anything** – the environment is shared by all six bootcamp labs.
+
+## What you will build
+
+**Assignment:** *Shopping-Assistant helps Contoso Sports shoppers with products, policies, live information and totals – and helps store staff solve IT problems using past support tickets and Microsoft Learn.*
+
+```
+ Shopper / store staff ──► Shopping-Assistant (prompt agent · bootcamp-chat, then model-router)
+                               │  instructions: which tool to use when
+                               ▼
+                 contoso-store-toolbox  (one MCP endpoint)
+                    ├─ File search ──► products.md + store-policies.md
+                    ├─ Foundry IQ ──► AI Search index bootcamp-baseline-v1 (IT tickets)
+                    ├─ Web search ──► live / general info, with sources
+                    ├─ Code interpreter ──► totals and comparisons
+                    └─ MCP: Microsoft Learn ──► official docs (existing MCP server)
+                               ▼
+   In the portal (look only) ──► versions · Responses / A2A endpoints · Publish options (Teams, M365 Copilot, Copilot Studio)
+```
+
+## How each step is written
+
+Every step tells you exactly:
+- 🖱️ **what to click** (in a table, in order)
+- ⌨️ **what to type in chat** (in a grey box – copy and paste it)
+- 👀 **what you should see**
 
 ## Follow-along (40-45 minutes)
 
-### 1. Explore the scenario (5 minutes)
+| Step | What you do | Time | Guide |
+|---|---|---|---|
+| 0 | Sign in – your environment is ready-made | 5 min | [lab/00-your-lab-environment.md](lab/00-your-lab-environment.md) |
+| 1 | Create your first agent | 5 min | [lab/01-create-your-first-agent.md](lab/01-create-your-first-agent.md) |
+| 2 | Build the **toolbox** (File search, Foundry IQ, Web search, Code interpreter, Microsoft Learn **MCP**) | 12 min | [lab/02-build-the-toolbox.md](lab/02-build-the-toolbox.md) |
+| 3 | Test each tool and read the **trace** | 8 min | [lab/03-test-tools-and-traces.md](lab/03-test-tools-and-traces.md) |
+| 4 | Let Foundry pick the model with **model router** | 7 min | [lab/04-model-router.md](lab/04-model-router.md) |
+| 5 | See where your agent can go: versions, endpoints and **Publish** options (look only) | 6 min | [lab/05-publish-options.md](lab/05-publish-options.md) |
+| 6 | Wrap up (nothing to delete) | 2 min | [lab/06-wrap-up.md](lab/06-wrap-up.md) |
 
-You are building a shopping assistant for a fictional store. Open
-[products.md](assets/products.md) and [store-policies.md](assets/store-policies.md)
-from the extracted Student ZIP. The first file describes three products; the
-second covers returns and delivery. Keep both files available for upload.
+**Total: 45 minutes.** The environment must be provisioned before the session. Trainers should confirm tool access, model-router availability and tracing beforehand. Keep to each step's time box; if deployment is delayed, watch the trainer's prepared example rather than extending the session.
 
-An agent combines a model, instructions and tools. The model generates the
-answer; the instructions define its behavior; File Search retrieves relevant
-passages. The files are evidence, not a guarantee that every answer is right.
+## Files you will use
 
-### 2. Create and try an agent (7 minutes)
+| File | Used in | Purpose |
+|---|---|---|
+| [assets/agent-instructions.txt](assets/agent-instructions.txt) | Step 1 | Instructions, including which tool to use when |
+| [assets/products.md](assets/products.md) | Step 2 (File search) | Sample product catalog (fictional) |
+| [assets/store-policies.md](assets/store-policies.md) | Step 2 (File search) | Sample returns & delivery policy (fictional) |
+| [assets/test-prompts.md](assets/test-prompts.md) | Steps 3–4 | Prompts to try, with expected answers |
 
-1. Open [Microsoft Foundry](https://ai.azure.com/nextgen), sign in with your
-   participant account and select the project matching `FoundryProjectEndpoint`.
-   Use the existing project and model deployment, not a new one.
-2. From the project home page, choose **Create an agent**. Create a text
-   prompt agent named `shopping-assistant-<suffix>`, using your own short
-   unique suffix. Do not edit an existing agent. In the playground, select the
-   `ChatDeploymentName` model deployment.
-3. Paste these **Instructions**, then save the agent version:
+## Key ideas (in one line each)
 
-   ```text
-   You are a helpful shopping assistant for a fictional store.
-   For product, return, and delivery questions, use File Search before answering.
-   Base claims only on the retrieved catalog and policy; cite the source when available.
-   If the files do not answer a question, say you do not know rather than guessing.
-   You cannot access real orders or live inventory, or place or change orders.
-   ```
-
-4. Before adding a tool, ask: `What is the price and capacity of the Ridge
-   Bottle?` Record the response. The agent does not yet have the catalog, so
-   an unsupported guess is not evidence of the answer.
-
-### 3. Add the knowledge files (10 minutes)
-
-1. In the agent playground, open **Tools > Add > Add tools** and choose
-   **File Search**. Depending on the portal version, it may be listed under
-   knowledge or files.
-2. Create a new vector store named `shopping-<suffix>` and upload the two
-   files from step 1. Select that store for the agent's File Search tool.
-   Record the store ID and the uploaded file IDs if the portal shows them;
-   they help identify only your own resources during cleanup. Do not attach
-   files to an existing store.
-3. Wait until both files finish processing and the store is ready. Save the
-   agent version and start a **new chat**, so the earlier answer is not
-   carried into the grounded test.
-
-File Search parses and indexes the files asynchronously. If the portal only
-offers an existing vector store ID, create the store and upload the files in
-the portal's vector-store workflow first, then select it. If that workflow is
-unavailable, ask the organizer rather than changing the shared environment.
-
-### 4. Test and inspect evidence (15 minutes)
-
-Use a new chat for each question. Compare the answers with the local files;
-the wording may vary.
-
-| Question | What to check |
-|---|---|
-| Which bottle holds at least 700 mL, has an advertised maximum cold time of at least 16 hours, and costs less than $40? | `products.md` identifies the Ridge Bottle: 750 mL, up to 18 hours and $32. "Up to" is not a guarantee. |
-| How much is standard delivery for a $32 order? | `store-policies.md` says $5 for an order below $50. |
-| Can I return an unused bottle in its original packaging 20 days after delivery, and who pays shipping? | Yes, the return is within 30 days; the customer pays shipping. |
-| My bottle arrived damaged. What should I do and who pays return shipping? | Report it within 14 days of delivery; the store pays return shipping. |
-| Does the store deliver to Japan? | The supplied policy does not say. The agent should acknowledge the missing information rather than invent a delivery area. |
-| Can you check the status of my order? | The agent should say it cannot access real orders, not claim to have checked. |
-
-For at least the first two answers, open any citation and select **Traces**
-beneath the response if available. Look for a File Search call and the
-retrieved product or policy passage. Compare the passage to the answer: a
-citation or a plausible answer alone does not establish correctness. If no
-tool call or source evidence is visible, record grounding as unconfirmed and
-ask the organizer. Compare the product answer with your pre-tool response.
-
-### 5. Finish safely (5 minutes)
-
-If you no longer need your work and can verify that nothing else uses it,
-delete only the agent and vector store you created for this lab. Deleting a
-vector store does not necessarily delete the uploaded file objects: delete
-those only if you can verify their IDs and that nothing else uses them.
-Deleting a file object can remove it from other agents and stores. If cleanup
-controls or ownership are unclear, leave the objects and ask the organizer to
-remove them during environment teardown. Never delete the shared project,
-model, Search service, baseline index, storage, connections, or another lab's
-work.
+- **Agent** = model + instructions + tools.
+- **Instructions** tell the agent who it is, what rules to follow and which tool to use when.
+- **Toolbox** is one set of tools for an assignment, behind one MCP endpoint, reusable by any agent.
+- **MCP** (Model Context Protocol) is the standard way to plug existing tools into agents.
+- **Foundry IQ** grounds an agent on an Azure AI Search knowledge source.
+- **Traces** show what the agent actually did (which tool, what it found).
+- **Model router** picks the best model for each question (Balanced, Quality or Cost).
+- **Publish** puts the same agent in Teams, Microsoft 365 Copilot and Copilot Studio (in your own tenant – not in this bootcamp).
 
 ## Checkpoints
 
-- A new prompt agent uses the provided chat deployment and instructions.
-- Its File Search tool is attached to a new vector store with both files fully
-  processed.
-- The product and delivery answers match the files, with retrieved evidence
-  visible; missing facts and unavailable order access are not invented.
-- Cleanup is limited to this lab's identified resources, or the organizer has
-  been told what remains.
+- You created your own prompt agent using the provided chat deployment.
+- Your toolbox includes File Search, Foundry IQ / Azure AI Search, Web search,
+  Code interpreter and Microsoft Learn MCP. Uploaded files finished processing.
+- Product and policy answers agree with the files. Ticket answers cite relevant
+  synthetic tickets, and traces expose tool calls and retrieved evidence.
+  A plausible answer or citation alone is not proof of correctness.
+- You tried model router, or watched the trainer's prepared example if deployment
+  was blocked, and inspected versions, endpoints and publishing options without publishing.
+- Shared projects, deployments, indexes, connections and other labs' assets remain unchanged.
 
 ## Troubleshooting
 
-- **Project, model or access missing:** confirm the participant tenant and
-  dashboard values, then contact the organizer. Do not create a replacement
-  deployment or grant yourself roles.
-- **File Search, upload or vector-store creation unavailable:** confirm the
-  organizer has prepared a supported agent setup and verified portal access.
-  In a standard setup, check your storage role and connected resources.
-  Report policy or permission failures rather than bypassing them.
-- **Files still processing or failed:** wait for ingestion and inspect its
-  status. Check that you uploaded the two `.md` files, then ask the organizer
-  if a failure persists.
-- **Answer is wrong or lacks evidence:** confirm that the saved agent version
-  has File Search and the correct ready store; start a new chat and retry a
-  specific question. Inspect the tool call and source before treating the
-  answer as grounded.
-- **No trace:** response-level details may be available without Application
-  Insights; full distributed tracing needs the project's tracing connection.
-  If neither a trace nor a citation exposes the source, report the limitation.
+- **Missing project, model or access:** check the participant account and dashboard
+  values, then contact the organizer. Do not create a replacement project, use
+  keys or grant yourself roles.
+- **File Search or toolbox unavailable:** ask the organizer to verify the supported
+  setup, portal workflow and permissions. Never reuse another lab's vector store
+  or edit a provisioned toolbox.
+- **Files still processing or failed:** inspect ingestion status and confirm the
+  two supplied files were uploaded. Ask the organizer if a failure persists.
+- **Ticket search fails:** use `bootcamp-search`, index `bootcamp-baseline-v1`
+  and simple / keyword queries. The baseline has no vector fields. Report
+  permission or connection failures rather than changing the index.
+- **Wrong answer or missing evidence:** confirm the saved agent and ready store,
+  start a new chat and inspect the tool call and retrieved passages. If no trace
+  or source evidence is visible, report grounding as unconfirmed to the trainer.
+- **Model router unavailable:** keep `bootcamp-chat`, watch the prepared example
+  and move on within the seven-minute time box.
+- **Publishing blocked:** expected in this environment; this step is look-only.
+
+## Learn more
+
+- Foundry Agent Service overview – https://learn.microsoft.com/en-us/azure/ai-foundry/agents/overview
+- What is Toolbox? – https://learn.microsoft.com/en-us/azure/foundry/agents/concepts/toolbox-overview
+- Connect to MCP servers – https://learn.microsoft.com/en-us/azure/foundry/agents/how-to/tools/model-context-protocol
+- File search tool – https://learn.microsoft.com/en-us/azure/foundry/agents/how-to/tools/file-search
+- Deploy and configure model router – https://learn.microsoft.com/en-us/azure/foundry/openai/how-to/model-router-configure
+- Publish to Microsoft Copilot and Teams – https://learn.microsoft.com/en-us/azure/foundry/agents/how-to/publish-copilot
+- Add a Foundry agent in Copilot Studio – https://learn.microsoft.com/en-us/microsoft-copilot-studio/agents-experience/add-agent-foundry
+
+> Product and policy data in this repo is fictional and for training only. The IT support tickets dataset is *Synthetic IT Support Tickets* by Muhammad Ahsan (CC BY 4.0), provisioned by the bootcamp organisers.
+> The Foundry portal changes often – if a button name differs slightly, look for the closest match.
 
 ## Source and adaptation
 
-Adapted from the
-[beginner session outline](https://github.com/sharanyaskonandur/Foundrybootcamp-beginner-session/tree/bd7778d33f5ceee6222c7767f95730bce53db00a).
-The requester confirmed the creator's permission for this bootcamp; this is not
-a public license or a broader reuse grant. The detailed guide and fictional
-files were authored for this adaptation because the linked source files were
-absent.
+Adapted from the creator-provided
+[45-minute MicroHack beginner lab](https://github.com/sharanyaskonandur/Foundrybootcamp-beginner-session/tree/552eabb06e2fc71faef64216bc1a3747003ab396).
+The creator requested this contribution. This is not a public license or a broader
+reuse grant. The guide retains this repository's content-pack sections and
+participant-safety requirements.
