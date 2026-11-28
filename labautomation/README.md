@@ -263,7 +263,10 @@ existing data or changing the keyless `AAD` connection.
 
 Dataset, agent and toolbox operations use the Foundry `v1` data-plane API.
 The toolbox connection uses management API `2026-09-01`, whose provider supports
-`UserEntraToken`. Toolbox file and vector-store requests use the **project-scoped**
+`UserEntraToken`. ARM can report either Boolean sharing value for this
+project-scoped connection; provisioning checks its target, authentication and
+metadata without assuming cross-project sharing. Toolbox file and vector-store
+requests use the **project-scoped**
 `{projectEndpoint}/openai/v1` endpoint, matching the
 [Azure AI Projects SDK client](https://github.com/Azure/azure-sdk-for-python/blob/main/sdk/ai/azure-ai-projects/azure/ai/projects/_patch.py).
 The project URL supplies the isolation boundary; do not fall back to the account
@@ -278,7 +281,8 @@ See [File Search](https://learn.microsoft.com/azure/foundry/agents/how-to/tools/
 and [toolbox setup](https://learn.microsoft.com/azure/foundry/agents/how-to/tools/toolbox).
 The toolbox tool uses the flat `vector_store_ids` shape in the current SDK contract.
 
-Uploads are reconciled by content-addressed filenames and content read-back.
+Uploads are reconciled by content-addressed filenames and SHA-256 read-back,
+whether Foundry returns file content as bytes or UTF-8 text.
 The private dataset blob is create-only and checked by length, SHA-256 and MD5;
 an incompatible existing dataset registration fails without an update. A rerun
 reuses the vector store only when its knowledge manifest and exact file set

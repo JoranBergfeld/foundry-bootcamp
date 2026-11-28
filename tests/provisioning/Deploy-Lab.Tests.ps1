@@ -789,7 +789,7 @@ Describe 'MicroHack Foundry provisioning hook' {
         $published.Count | Should -Be 0
     }
 
-    It 'uploads the golden dataset separately from the three indexed knowledge files and attaches the toolbox to a prompt agent' {
+    It 'uploads the golden dataset separately, verifies binary knowledge file responses, and attaches the toolbox to a prompt agent' {
         $assets = Invoke-TestEvals
         $state = $global:ProvisioningTestDataPlane
         $assets.EvalsDatasetName | Should -Be 'support-golden-v2'
@@ -814,6 +814,47 @@ Describe 'MicroHack Foundry provisioning hook' {
         $agent.definition.tools[0].project_connection_id | Should -Be 'bootcamp-evals-toolbox'
         $state.Foundry.Connections['bootcamp-evals-toolbox'].properties.authType | Should -Be 'UserEntraToken'
         $state.Foundry.Connections['bootcamp-evals-toolbox'].properties.audience | Should -Be 'https://ai.azure.com'
+    }
+
+    It 'also accepts text responses when verifying evaluation knowledge files' {
+        $global:ProvisioningTestDataPlane.EvalsFileContentAsString = $true
+        $assets = Invoke-TestEvals
+        $global:ProvisioningTestDataPlane.Foundry.Stores[$assets.EvalsVectorStoreId].file_ids | Should -HaveCount 3
+    }
+
+    It 'reuses a project toolbox connection when sharing is reported as <Shared>' -ForEach @(
+        @{ Shared = $false }
+        @{ Shared = $true }
+    ) {
+        $state = $global:ProvisioningTestDataPlane
+        $state.EvalsConnectionSharedToAll = $Shared
+        $assets = Invoke-TestEvals
+        $state.Foundry.Connections['bootcamp-evals-toolbox'].properties.isSharedToAll | Should -Be $Shared
+        $create = @($state.Requests | Where-Object {
+            $_.Method -eq 'Put' -and $_.Uri -like '*/connections/bootcamp-evals-toolbox?*'
+        })
+        $create | Should -HaveCount 1
+        ($create[0].Body | ConvertFrom-Json -AsHashtable).properties.isSharedToAll | Should -BeTrue
+        $before = $state.Requests.Count
+        (Invoke-TestEvals).EvalsAgentVersion | Should -Be $assets.EvalsAgentVersion
+        @($state.Requests | Select-Object -Skip $before | Where-Object {
+            $_.Method -in @('Put', 'Patch', 'Delete') -and $_.Uri -like '*/connections/bootcamp-evals-toolbox?*'
+        }).Count | Should -Be 0
+    }
+
+    It 'rejects a project toolbox connection with a <Problem> sharing value' -ForEach @(
+        @{ Problem = 'missing' }
+        @{ Problem = 'non-Boolean' }
+    ) {
+        $null = Invoke-TestEvals
+        $state = $global:ProvisioningTestDataPlane
+        $properties = $state.Foundry.Connections['bootcamp-evals-toolbox'].properties
+        if ($Problem -eq 'missing') { $properties.Remove('isSharedToAll') } else { $properties.isSharedToAll = 'invalid' }
+        $before = $state.Requests.Count
+        { Invoke-TestEvals } | Should -Throw '*toolbox connection*incompatible*not overwritten*'
+        @($state.Requests | Select-Object -Skip $before | Where-Object {
+            $_.Method -in @('Put', 'Patch', 'Delete') -and $_.Uri -like '*/connections/bootcamp-evals-toolbox?*'
+        }).Count | Should -Be 0
     }
 
     It 'provisions evaluation assets when the ARM project has no amlWorkspace property' {
@@ -900,7 +941,12 @@ Describe 'MicroHack Foundry provisioning hook' {
         $state = $global:ProvisioningTestDataPlane
         switch ($Resource) {
             dataset { $state.Foundry.Datasets['support-golden-v2/1'].tags.sha256 = 'participant' }
-            file { $state.Foundry.Files['file-1'].Content = 'participant content' }
+            file {
+                $file = $state.Foundry.Files['file-1']
+                $firstCharacter = if ($file.Content[0] -eq 'X') { 'Y' } else { 'X' }
+                $file.Content = $firstCharacter + $file.Content.Substring(1)
+                [Text.Encoding]::UTF8.GetByteCount($file.Content) | Should -Be $file.bytes
+            }
             store { $state.Foundry.Stores[$assets.EvalsVectorStoreId].metadata['bootcamp-source-sha256'] = 'participant' }
             toolbox { $state.Foundry.toolboxes[$assets.EvalsToolboxName][0].tools = @(@{ type = 'web_search' }) }
             connection { $state.Foundry.Connections['bootcamp-evals-toolbox'].properties.authType = 'None' }

@@ -16,6 +16,8 @@ function New-FakeAzureDataPlane {
         EvalsPageSize = 100
         EvalsMcpError = $false
         EvalsMcpSse = $false
+        EvalsFileContentAsString = $false
+        EvalsConnectionSharedToAll = $false
         ProjectProperties = @{ provisioningState = 'Succeeded'; displayName = 'bootcamp'; isDefault = $false }
     }
 }
@@ -115,6 +117,7 @@ function Invoke-FakeAzureDataPlane {
                 $name = $Matches[1]
                 if ($methodName -eq 'Put') {
                     if ($foundry.Connections.ContainsKey($name)) { throw 'Existing toolbox connection was overwritten.' }
+                    $json.properties.isSharedToAll = $State.EvalsConnectionSharedToAll
                     $foundry.Connections[$name] = $json
                 }
                 if ($foundry.Connections.ContainsKey($name)) { $result = $foundry.Connections[$name] } else { $status = 404 }
@@ -180,7 +183,9 @@ function Invoke-FakeAzureDataPlane {
                     $result = $foundry.Files[$id]
                 } else { $result = @{ data = @($foundry.Files.Values); has_more = $false } }
             } elseif ($path -match '^/openai/v1/files/([^/]+)/content$') {
-                return [pscustomobject]@{ StatusCode = 200; Content = $foundry.Files[$Matches[1]].Content; Headers = @{} }
+                $content = $foundry.Files[$Matches[1]].Content
+                if (-not $State.EvalsFileContentAsString) { $content = [Text.Encoding]::UTF8.GetBytes($content) }
+                return [pscustomobject]@{ StatusCode = 200; Content = $content; Headers = @{} }
             } elseif ($path -eq '/openai/v1/vector_stores') {
                 if ($methodName -eq 'Post') {
                     $json.id = "vs-$($foundry.Stores.Count + 1)"
