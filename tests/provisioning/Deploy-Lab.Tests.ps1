@@ -1185,7 +1185,8 @@ Describe 'MicroHack Foundry provisioning hook' {
             # Search reads the baseline container; the full-text baseline needs no Foundry access.
             @{ Role = '2a2b9908-6ea1-4ae2-8e65-a410df84e7d1'; Principal = 'Microsoft.Search/searchServices'; Scope = 'Microsoft.Storage/storageAccounts' }
             @{ Role = '3913510d-42f4-4e42-8a64-420c390055eb'; Principal = 'accounts/projects'; Scope = 'Microsoft.Insights/components' }
-            @{ Role = '2a2b9908-6ea1-4ae2-8e65-a410df84e7d1'; Principal = 'accounts/projects'; Scope = 'Microsoft.Storage/storageAccounts' }
+            # File Search creates backing blobs through the project identity.
+            @{ Role = 'ba92f5b4-2d11-453d-a403-e96b0029c9fe'; Principal = 'accounts/projects'; Scope = 'Microsoft.Storage/storageAccounts' }
         )
         foreach ($binding in $expected) {
             @($grants | Where-Object { $_.Role -match $binding.Role -and $_.Principal -match $binding.Principal -and
