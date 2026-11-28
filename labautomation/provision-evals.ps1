@@ -163,7 +163,8 @@ if (-not (Test-EvalsDefinition $dataset $datasetDefinition) -or [string]::IsNull
 $files = @(Get-EvalsList "$openaiEndpoint/files?limit=100")
 $fileIds = @($knowledge | ForEach-Object {
     $bytes = $_.Bytes
-    $filename = "bootcamp-evals-$(Get-EvalsHash $bytes)-$($_.Name)"
+    $fileHash = Get-EvalsHash $bytes
+    $filename = "bootcamp-evals-$fileHash-$($_.Name)"
     $existing = @($files | Where-Object { $_.filename -ceq $filename })
     if ($existing.Count -gt 1) { throw "Evaluation file '$filename' is ambiguous; no files were deleted." }
     if ($existing.Count -eq 1) {
@@ -184,7 +185,14 @@ $fileIds = @($knowledge | ForEach-Object {
     }
     $content = Invoke-ProvisioningRequest -Uri "$openaiEndpoint/files/$($file.id)/content" -Method Get `
         -ResourceUrl $audience -Headers $projectHeaders.Clone()
-    if ([string]$content.Content -cne [Text.Encoding]::UTF8.GetString($bytes)) {
+    if ($content.Content -is [byte[]]) {
+        $contentBytes = $content.Content
+    } elseif ($content.Content -is [string]) {
+        $contentBytes = [Text.Encoding]::UTF8.GetBytes($content.Content)
+    } else {
+        throw "Evaluation file '$filename' content could not be verified; unexpected response type. It was not replaced."
+    }
+    if ((Get-EvalsHash $contentBytes) -cne $fileHash) {
         throw "Evaluation file '$filename' has different content; it was not replaced."
     }
     $file.id
@@ -297,7 +305,12 @@ if ($null -eq $connection) {
         -ResourceUrl 'https://management.azure.com/' -Headers @{ 'If-None-Match' = '*' }
     $connection = Invoke-EvalsJson $connectionUri -ResourceUrl 'https://management.azure.com/' -Headers @{}
 }
-if (-not (Test-EvalsDefinition $connection $connectionDefinition)) {
+$connectionVerification = @{ properties = $connectionDefinition.properties.Clone() }
+# ARM can report either sharing flag for a connection scoped to this project.
+$connectionVerification.properties.Remove('isSharedToAll')
+if (-not (Test-EvalsDefinition $connection $connectionVerification) -or
+    -not $connection.properties.Contains('isSharedToAll') -or
+    $connection.properties.isSharedToAll -isnot [bool]) {
     throw "Evaluation toolbox connection '$connectionName' is incompatible; it was not overwritten."
 }
 
