@@ -302,11 +302,12 @@ resource evalsStorageConnection 'Microsoft.CognitiveServices/accounts/projects/c
   }
 }
 
-resource projectEvalsBlobReader 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
-  name: guid(storage.id, project.id, storageBlobDataReaderRoleId)
+// File Search creates backing blobs through the project identity, so read-only access is insufficient.
+resource projectEvalsBlobContributor 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
+  name: guid(storage.id, project.id, storageBlobDataContributorRoleId)
   scope: storage
   properties: {
-    roleDefinitionId: storageBlobDataReaderRoleId
+    roleDefinitionId: storageBlobDataContributorRoleId
     principalId: project.identity.principalId
     principalType: 'ServicePrincipal'
   }

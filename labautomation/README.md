@@ -221,7 +221,7 @@ idempotent):
 | Provisioner | Storage Blob Data Contributor | Storage | Upload and verify the baseline |
 | Provisioner | Search Service Contributor, Search Index Data Reader | Search | Create the indexer and verify queries |
 | Provisioner | Foundry User | Primary Foundry account | Upload evaluation files and create dataset, toolbox and prompt-agent versions |
-| Foundry project MI | Storage Blob Data Reader | Storage | Read the private golden dataset through `bootcamp-evals-storage` |
+| Foundry project MI | Storage Blob Data Contributor | Storage | Read the private golden dataset and create File Search backing blobs |
 
 If the provisioner is also a supplied participant, its participant roles
 already cover these operations and duplicate role assignments are avoided.
@@ -253,6 +253,13 @@ Invoke-Pester .\tests\provisioning\Deploy-Lab.Tests.ps1
 | Toolbox `bootcamp-support-evals` | File Search pinned to that vector store |
 | Connection `bootcamp-evals-toolbox` | RemoteTool to the version-specific toolbox MCP endpoint, `UserEntraToken`, audience `https://ai.azure.com` |
 | Prompt agent `bootcamp-support-agent` | `bootcamp-chat`, pinned toolbox version, deliberately incorrect weekend routing override from Lab 03 |
+
+File Search uploads create backing blobs using the Foundry project identity.
+That identity needs Storage Blob Data Contributor on the participant environment's
+storage account; Storage Blob Data Reader alone causes
+`ResourceMsiTokenDoesntHavePermissionsOnStorage` during file creation.
+An incremental redeployment adds the contributor assignment without deleting
+existing data or changing the keyless `AAD` connection.
 
 Dataset, agent and toolbox operations use the Foundry `v1` data-plane API.
 The toolbox connection uses management API `2026-09-01`, whose provider supports
